@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@keyframes shimmer {
+  0% {
+    background-position: -800px 0;
+  }
+  100% {
+    background-position: 800px 0;
+  }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #f0f0f5 25%, #e6e6ef 50%, #f0f0f5 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes skeleton-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.skeleton-card-in {
+  animation: skeleton-fade-in 0.4s ease forwards;
+}
+
+/* ── Navigation tab bar ───────────────────────────────────────────────────── */
+
+.nav-tab-bar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.nav-tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 18px;
+  height: 44px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  outline: none;
+}
+.nav-tab:hover:not(.nav-tab--active) {
+  background: rgba(10, 10, 10, 0.04);
+  color: #0a0a0a;
+}
+.nav-tab--active {
+  border-bottom-color: #0a0a0a;
+  color: #0a0a0a;
+}
+
+/* ── Top-bar action buttons ───────────────────────────────────────────────── */
+
+.topbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  outline: none;
+}
+.topbar-btn:hover {
+  background: rgba(10, 10, 10, 0.05);
+}
+.topbar-btn--active {
+  background: #0a0a0a;
+  color: #fff;
+  border-color: #0a0a0a;
+}
+.topbar-btn--active:hover {
+  background: #1c1c24;
+}
