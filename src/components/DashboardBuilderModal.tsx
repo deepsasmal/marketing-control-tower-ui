@@ -156,6 +156,9 @@ export const DashboardBuilderModal = ({
   const [layoutDrafts, setLayoutDrafts] = useState<Record<string, { display_order: number; grid_col_start: number; grid_col_span: number; grid_row: number }>>({});
   const [reorderSaving, setReorderSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [dashboardSearch, setDashboardSearch] = useState('');
+  const [cardSearch, setCardSearch] = useState('');
+  const [autoPreview, setAutoPreview] = useState(true);
 
   const loadDashboards = async () => {
     setLoadingList(true);
@@ -513,6 +516,27 @@ export const DashboardBuilderModal = ({
     [selectedCubeDimensions],
   );
 
+  const filteredDashboards = useMemo(() => {
+    const q = dashboardSearch.trim().toLowerCase();
+    if (!q) return dashboards;
+    return dashboards.filter((d: any) =>
+      String(d.name || '').toLowerCase().includes(q) ||
+      String(d.slug || '').toLowerCase().includes(q) ||
+      String(d.audience || '').toLowerCase().includes(q),
+    );
+  }, [dashboards, dashboardSearch]);
+
+  const filteredCards = useMemo(() => {
+    const q = cardSearch.trim().toLowerCase();
+    const cards = dashboardDef?.cards || [];
+    if (!q) return cards;
+    return cards.filter((c: any) =>
+      String(c.title || '').toLowerCase().includes(q) ||
+      String(c.slug || '').toLowerCase().includes(q) ||
+      String(c.chart_type || '').toLowerCase().includes(q),
+    );
+  }, [dashboardDef, cardSearch]);
+
   const previewConfig = useMemo(() => {
     const measures: string[] = cardDraft?.measures || [];
     const dimensions: string[] = cardDraft?.dimensions || [];
@@ -534,6 +558,41 @@ export const DashboardBuilderModal = ({
     return { measures, dimKey, chartData, color };
   }, [previewRows, cardDraft]);
 
+  const xAxisLabel = (cardDraft?.x_axis_label || '').trim();
+  const yAxisLabel = (cardDraft?.y_axis_label || '').trim();
+
+  // Optional auto-preview for smoother editing flow.
+  useEffect(() => {
+    if (!cardBuilderOpen || !autoPreview || !cardDraft?.measures?.length) return;
+    const timer = setTimeout(async () => {
+      try {
+        const previewQuery = {
+          measures: cardDraft.measures,
+          dimensions: cardDraft.dimensions || [],
+          filters: jsonSafeParse(cardDraft.filters_json, []),
+          time_dimensions: jsonSafeParse(cardDraft.time_dimensions_json, []),
+          order: jsonSafeParse(cardDraft.order_json, {}),
+          limit: 50,
+          offset: 0,
+        };
+        const data = await fetchAnalyticsQuery(previewQuery, token);
+        setPreviewRows(Array.isArray(data) ? data : data?.data || []);
+      } catch {
+        // Keep manual preview UX unaffected when draft JSON is invalid.
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [
+    cardBuilderOpen,
+    autoPreview,
+    token,
+    cardDraft?.measures,
+    cardDraft?.dimensions,
+    cardDraft?.filters_json,
+    cardDraft?.time_dimensions_json,
+    cardDraft?.order_json,
+  ]);
+
   return (
     <>
       <Modal
@@ -541,7 +600,7 @@ export const DashboardBuilderModal = ({
         onClose={onClose}
         title="Dashboard Builder"
         subtitle="Create, edit, and manage dashboards/cards"
-        fullscreen
+        nearlyFullscreen
       >
         <div style={{ display: 'grid', gridTemplateColumns: sidebarCollapsed ? '44px 1fr' : '300px 1fr', gap: 16, minHeight: 560 }}>
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', background: C.surface }}>
@@ -573,12 +632,20 @@ export const DashboardBuilderModal = ({
                     </button>
                   </div>
                 </div>
+                <div style={{ padding: '8px 10px', borderBottom: `1px solid ${C.border}` }}>
+                  <input
+                    value={dashboardSearch}
+                    onChange={e => setDashboardSearch(e.target.value)}
+                    placeholder="Search dashboards..."
+                    style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 9px', fontSize: 12, outline: 'none' }}
+                  />
+                </div>
                 <div style={{ maxHeight: 510, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {loadingList ? (
                     <div style={{ color: C.textMuted, fontSize: 12, padding: 8 }}>Loading...</div>
                   ) : listError ? (
                     <div style={{ color: C.red, fontSize: 12, padding: 8 }}>{listError}</div>
-                  ) : dashboards.map(d => (
+                  ) : filteredDashboards.map(d => (
                     <button
                       key={d.slug}
                       onClick={() => { setIsCreateMode(false); setSelectedSlug(d.slug); }}
@@ -682,7 +749,13 @@ export const DashboardBuilderModal = ({
                 <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 14, display: 'grid', gap: 10 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ fontSize: 13, fontWeight: 700 }}>Card Canvas</div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <input
+                        value={cardSearch}
+                        onChange={e => setCardSearch(e.target.value)}
+                        placeholder="Search cards..."
+                        style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: '6px 10px', fontSize: 12, minWidth: 180, outline: 'none' }}
+                      />
                       <button onClick={() => openCardBuilder()} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>+ Add Card</button>
                       <button onClick={saveLayout} disabled={reorderSaving} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', opacity: reorderSaving ? 0.65 : 1 }}>
                         {reorderSaving ? 'Saving...' : 'Save Layout'}
@@ -722,7 +795,7 @@ export const DashboardBuilderModal = ({
                             <div>Actions</div>
                           </div>
 
-                          {(dashboardDef?.cards || []).map((card: any) => {
+                          {filteredCards.map((card: any) => {
                             const layout = layoutDrafts[card.slug] || {};
                             return (
                               <div
@@ -796,12 +869,42 @@ export const DashboardBuilderModal = ({
         onClose={() => setCardBuilderOpen(false)}
         title={cardEditing ? `Edit Card: ${cardEditing.title}` : 'Create Card'}
         subtitle="Pick cube, measures, valid drilldown dimensions, then configure chart"
-        fullscreen
+        nearlyFullscreen
       >
         {cardDraft && (
           <div style={{ display: 'grid', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {[
+                { label: '1. Cube', done: !!cardDraft.cube_name },
+                { label: '2. Measures', done: (cardDraft.measures || []).length > 0 },
+                { label: '3. Dimensions', done: true },
+                { label: '4. Display', done: !!cardDraft.title && !!cardDraft.chart_type },
+              ].map((s) => (
+                <span
+                  key={s.label}
+                  style={{
+                    border: `1px solid ${s.done ? C.black : C.border}`,
+                    color: s.done ? C.black : C.textMuted,
+                    background: s.done ? C.surfaceAlt : C.surface,
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                  }}
+                >
+                  {s.label}
+                </span>
+              ))}
+              <span style={{ border: `1px solid ${C.border}`, borderRadius: 999, padding: '4px 10px', fontSize: 11, color: C.textMuted }}>
+                Selected: {(cardDraft.measures || []).length} measure(s), {(cardDraft.dimensions || []).length} dimension(s)
+              </span>
+            </div>
+
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 10 }}>
-              <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Step 1 — Cube / View</div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: C.textPrimary, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, border: `1px solid ${C.border}`, borderRadius: 999, padding: '2px 8px', color: C.textMuted }}>Step 1</span>
+                Choose Cube / View
+              </div>
               <select
                 value={cardDraft.cube_name}
                 onChange={e => setCardDraft((p: any) => ({ ...p, cube_name: e.target.value, measures: [], dimensions: [], filters_json: '[]', time_dimensions_json: '[]', order_json: '{}' }))}
@@ -813,7 +916,10 @@ export const DashboardBuilderModal = ({
             </div>
 
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 10 }}>
-              <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Step 2 — Measures</div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: C.textPrimary, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, border: `1px solid ${C.border}`, borderRadius: 999, padding: '2px 8px', color: C.textMuted }}>Step 2</span>
+                Select Measures
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, maxHeight: 130, overflow: 'auto' }}>
                 {(cubeMeta?.measures || []).map((m: any) => {
                   const checked = cardDraft.measures.includes(m.name);
@@ -835,7 +941,10 @@ export const DashboardBuilderModal = ({
             </div>
 
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 10 }}>
-              <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Step 3 — Valid Dimensions (drill-down safe)</div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: C.textPrimary, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, border: `1px solid ${C.border}`, borderRadius: 999, padding: '2px 8px', color: C.textMuted }}>Step 3</span>
+                Select Dimensions (Drill-down Safe)
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, maxHeight: 130, overflow: 'auto' }}>
                 {validDimensions.length === 0 ? (
                   <div style={{ fontSize: 12, color: C.textMuted }}>No shared drilldown dimensions for selected measure(s). Leave empty for KPI/single value.</div>
@@ -860,7 +969,10 @@ export const DashboardBuilderModal = ({
             </div>
 
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 10, display: 'grid', gap: 10 }}>
-              <div style={{ fontWeight: 700, fontSize: 12 }}>Step 4 — Display + Query config</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: C.textPrimary, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, border: `1px solid ${C.border}`, borderRadius: 999, padding: '2px 8px', color: C.textMuted }}>Step 4</span>
+                Configure Display & Query
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
                 <input placeholder="Card title" value={cardDraft.title} onChange={e => setCardDraft((p: any) => ({ ...p, title: e.target.value, slug: p.slug || slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 <input placeholder="Card slug" value={cardDraft.slug} onChange={e => setCardDraft((p: any) => ({ ...p, slug: slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
@@ -918,7 +1030,11 @@ export const DashboardBuilderModal = ({
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'sticky', bottom: 0, background: C.surface, borderTop: `1px solid ${C.border}`, paddingTop: 10, paddingBottom: 2, zIndex: 2 }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textMuted }}>
+                <input type="checkbox" checked={autoPreview} onChange={e => setAutoPreview(e.target.checked)} />
+                Auto-preview (500ms debounce)
+              </label>
               <button onClick={runPreview} disabled={previewLoading} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '8px 10px', cursor: 'pointer' }}>
                 {previewLoading ? 'Previewing...' : 'Live Preview'}
               </button>
@@ -965,25 +1081,41 @@ export const DashboardBuilderModal = ({
                     <div style={{ width: '100%', height: 230 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         {cardDraft.chart_type === 'bar' ? (
-                          <BarChart data={previewConfig.chartData}>
+                          <BarChart data={previewConfig.chartData} margin={{ top: 8, right: 8, left: 16, bottom: 26 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }} />
-                            <YAxis tick={{ fontSize: 10, fill: C.textMuted }} />
+                            <XAxis
+                              dataKey="name"
+                              tick={{ fontSize: 10, fill: C.textMuted }}
+                              label={xAxisLabel ? { value: xAxisLabel, position: 'insideBottom', offset: -12, fill: C.textSecondary, fontSize: 11 } : undefined}
+                            />
+                            <YAxis
+                              tick={{ fontSize: 10, fill: C.textMuted }}
+                              width={56}
+                              label={yAxisLabel ? { value: yAxisLabel, angle: -90, position: 'insideLeft', offset: -6, fill: C.textSecondary, fontSize: 11 } : undefined}
+                            />
                             <Tooltip />
                             <Bar dataKey={previewConfig.measures[0]} fill={previewConfig.color} radius={[4, 4, 0, 0]} />
                           </BarChart>
                         ) : cardDraft.chart_type === 'line' ? (
-                          <LineChart data={previewConfig.chartData}>
+                          <LineChart data={previewConfig.chartData} margin={{ top: 8, right: 8, left: 16, bottom: 26 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }} />
-                            <YAxis tick={{ fontSize: 10, fill: C.textMuted }} />
+                            <XAxis
+                              dataKey="name"
+                              tick={{ fontSize: 10, fill: C.textMuted }}
+                              label={xAxisLabel ? { value: xAxisLabel, position: 'insideBottom', offset: -12, fill: C.textSecondary, fontSize: 11 } : undefined}
+                            />
+                            <YAxis
+                              tick={{ fontSize: 10, fill: C.textMuted }}
+                              width={56}
+                              label={yAxisLabel ? { value: yAxisLabel, angle: -90, position: 'insideLeft', offset: -6, fill: C.textSecondary, fontSize: 11 } : undefined}
+                            />
                             <Tooltip />
                             {previewConfig.measures.map((m, i) => (
                               <Line key={m} type="monotone" dataKey={m} stroke={[previewConfig.color, C.green, C.purple, C.amber][i % 4]} strokeWidth={2} dot={false} />
                             ))}
                           </LineChart>
                         ) : (
-                          <AreaChart data={previewConfig.chartData}>
+                          <AreaChart data={previewConfig.chartData} margin={{ top: 8, right: 8, left: 16, bottom: 26 }}>
                             <defs>
                               <linearGradient id="builderAreaFill" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="5%" stopColor={previewConfig.color} stopOpacity={0.25} />
@@ -991,8 +1123,16 @@ export const DashboardBuilderModal = ({
                               </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }} />
-                            <YAxis tick={{ fontSize: 10, fill: C.textMuted }} />
+                            <XAxis
+                              dataKey="name"
+                              tick={{ fontSize: 10, fill: C.textMuted }}
+                              label={xAxisLabel ? { value: xAxisLabel, position: 'insideBottom', offset: -12, fill: C.textSecondary, fontSize: 11 } : undefined}
+                            />
+                            <YAxis
+                              tick={{ fontSize: 10, fill: C.textMuted }}
+                              width={56}
+                              label={yAxisLabel ? { value: yAxisLabel, angle: -90, position: 'insideLeft', offset: -6, fill: C.textSecondary, fontSize: 11 } : undefined}
+                            />
                             <Tooltip />
                             <Area type="monotone" dataKey={previewConfig.measures[0]} stroke={previewConfig.color} fill="url(#builderAreaFill)" strokeWidth={2} />
                           </AreaChart>
@@ -1026,10 +1166,32 @@ export const DashboardBuilderModal = ({
                     ) : (
                       <div style={{ width: '100%', height: 230 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <ScatterChart>
+                          <ScatterChart margin={{ top: 8, right: 8, left: 24, bottom: 26 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                            <XAxis dataKey={previewConfig.measures[0]} name={previewConfig.measures[0]} />
-                            <YAxis dataKey={previewConfig.measures[1]} name={previewConfig.measures[1]} />
+                            <XAxis
+                              dataKey={previewConfig.measures[0]}
+                              name={previewConfig.measures[0]}
+                              label={{
+                                value: xAxisLabel || previewConfig.measures[0].split('.').pop(),
+                                position: 'insideBottom',
+                                offset: -12,
+                                fill: C.textSecondary,
+                                fontSize: 11,
+                              }}
+                            />
+                            <YAxis
+                              dataKey={previewConfig.measures[1]}
+                              name={previewConfig.measures[1]}
+                              width={56}
+                              label={{
+                                value: yAxisLabel || previewConfig.measures[1].split('.').pop(),
+                                angle: -90,
+                                position: 'insideLeft',
+                                offset: -6,
+                                fill: C.textSecondary,
+                                fontSize: 11,
+                              }}
+                            />
                             <Tooltip cursor={{ strokeDasharray: '3 3' }} />
                             <Scatter data={previewConfig.chartData} fill={previewConfig.color} />
                           </ScatterChart>
