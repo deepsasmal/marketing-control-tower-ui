@@ -53,6 +53,62 @@ const COLOR_SCHEMES = ['default', 'blue', 'green', 'red', 'purple', 'orange', 't
 const FILTER_OPERATORS = ['equals', 'notEquals', 'contains', 'gt', 'gte', 'lt', 'lte', 'set', 'notSet', 'inDateRange'];
 const TIME_GRANULARITIES = ['second', 'minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'];
 const SLUG_REGEX = /^[a-z0-9-]{3,100}$/;
+const BUSINESS_TOOLTIPS: Record<string, string> = {
+  dashboardName: 'Business name shown to users in dashboard tabs and lists.',
+  dashboardSlug: 'Stable URL-friendly ID used internally. Lowercase letters, numbers, and dashes only.',
+  audience: 'Primary audience this dashboard is designed for (helps organization and discovery).',
+  description: 'Short summary explaining the purpose of this dashboard.',
+  icon: 'Icon key used to visually identify this dashboard in navigation.',
+  displayOrder: 'Lower numbers appear earlier in dashboard lists and menus.',
+  refreshSeconds: 'How often data auto-refreshes for this dashboard, in seconds.',
+  tags: 'Keywords for search and grouping, separated by commas.',
+  saveDashboard: 'Save dashboard metadata changes (name, audience, refresh, etc.).',
+  deleteDashboard: 'Permanently remove this dashboard and all its cards.',
+  dashboardSearch: 'Search dashboards by name, slug, or audience.',
+  createDashboard: 'Create a brand-new dashboard configuration.',
+  openDashboard: 'Open this dashboard in the main viewing screen.',
+  cancelCreate: 'Exit create mode without saving a new dashboard.',
+  cardSearch: 'Search cards in this dashboard by title, slug, or chart type.',
+  addCard: 'Create a new card for this dashboard.',
+  saveLayout: 'Save card order and grid placement changes.',
+  editCard: 'Edit this card query, style, and layout settings.',
+  deleteCard: 'Delete this card from the dashboard.',
+  cubeSelect: 'Choose the data model (cube/view) that powers this card.',
+  measureSelect: 'Metrics to calculate and visualize (for example: revenue, leads, count).',
+  dimensionSelect: 'Breakdown fields users can group and drill by (for example: region, campaign).',
+  cardTitle: 'Card headline displayed to business users.',
+  cardSlug: 'Unique card ID used internally. Lowercase letters, numbers, and dashes only.',
+  chartType: 'Visual style for this card (KPI, bar, line, table, etc.).',
+  colorScheme: 'Primary color theme used for card values and chart series.',
+  subtitle: 'Optional supporting context shown below the card title.',
+  valuePrefix: 'Text shown before values (for example: $, EUR, ~).',
+  valueSuffix: 'Text shown after values (for example: %, units, days).',
+  xAxisLabel: 'Business-friendly label for the horizontal chart axis.',
+  yAxisLabel: 'Business-friendly label for the vertical chart axis.',
+  colStart: 'Grid column where this card begins (1 to 12).',
+  colSpan: 'How many grid columns this card occupies (1 to 12).',
+  row: 'Vertical row position of this card in the dashboard grid.',
+  filterField: 'Field to filter by (for example: country, channel, account).',
+  filterOperator: 'How the filter is applied (equals, contains, greater than, etc.).',
+  filterValue: 'Value to match for the selected filter field.',
+  addFilter: 'Add another filter condition to narrow the card query.',
+  removeFilter: 'Remove this filter condition.',
+  timeField: 'Optional date/time field for trend grouping and date slicing.',
+  timeGranularity: 'Time bucket size for grouping (day, week, month, quarter, year).',
+  startDate: 'Start date for the reporting window (inclusive).',
+  endDate: 'End date for the reporting window (inclusive).',
+  sortField: 'Field used to sort results in charts or tables.',
+  sortDirection: 'Sort direction: highest/lowest first.',
+  advancedJson: 'Optional advanced mode for direct JSON query editing.',
+  filtersJson: 'Advanced: raw filters array in JSON format.',
+  timeJson: 'Advanced: raw time dimensions array in JSON format.',
+  orderJson: 'Advanced: raw order object in JSON format.',
+  showLegend: 'Show or hide chart legend labels.',
+  showDataLabels: 'Show or hide numeric labels directly on chart marks.',
+  autoPreview: 'Automatically refresh preview after edits with a short delay.',
+  livePreview: 'Run preview now using current card configuration.',
+  saveCard: 'Save this card to the selected dashboard.',
+};
 
 const emptyDashboard = {
   name: '',
@@ -157,6 +213,7 @@ export const DashboardBuilderModal = ({
   onNavigate,
   onRefreshDashboards,
 }: BuilderProps) => {
+  const tip = (key: string) => BUSINESS_TOOLTIPS[key] || '';
   const [dashboards, setDashboards] = useState<any[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState('');
@@ -580,6 +637,56 @@ export const DashboardBuilderModal = ({
     }
   };
 
+  const resetLayoutIntelligently = () => {
+    if (!dashboardDef?.cards?.length) return;
+
+    const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val));
+    const toNum = (val: any, fallback: number) => {
+      const n = Number(val);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    const cardsSorted = [...dashboardDef.cards].sort((a: any, b: any) => {
+      const aDraft = layoutDrafts[a.slug] || {};
+      const bDraft = layoutDrafts[b.slug] || {};
+      const aOrder = toNum(aDraft.display_order, toNum(a.display_order, 0));
+      const bOrder = toNum(bDraft.display_order, toNum(b.display_order, 0));
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return String(a.slug).localeCompare(String(b.slug));
+    });
+
+    let currentRow = 1;
+    let currentCol = 1;
+    const nextLayouts: Record<string, { display_order: number; grid_col_start: number; grid_col_span: number; grid_row: number }> = {};
+
+    cardsSorted.forEach((card: any, idx: number) => {
+      const draft = layoutDrafts[card.slug] || {};
+      const existingSpan = toNum(draft.grid_col_span, toNum(card.grid_col_span, card.chart_type === 'kpi' ? 3 : 6));
+      const span = clamp(Math.round(existingSpan), 1, 12);
+
+      if (currentCol + span - 1 > 12) {
+        currentRow += 1;
+        currentCol = 1;
+      }
+
+      nextLayouts[card.slug] = {
+        display_order: idx,
+        grid_col_start: currentCol,
+        grid_col_span: span,
+        grid_row: currentRow,
+      };
+
+      currentCol += span;
+      if (currentCol > 12) {
+        currentRow += 1;
+        currentCol = 1;
+      }
+    });
+
+    setLayoutDrafts(nextLayouts);
+    setDashboardMessage('Layout reset to a clean grid. Review and click "Save Layout" to apply.');
+  };
+
   const selectedCubeDimensions = useMemo(() => {
     return (cubeMeta?.dimensions || []) as Array<{ name: string; title: string; type: string; shortTitle?: string }>;
   }, [cubeMeta]);
@@ -694,7 +801,7 @@ export const DashboardBuilderModal = ({
         subtitle="Manage cube schemas and dashboard configuration"
         nearlyFullscreen
       >
-        <div style={{ display: 'grid', gridTemplateColumns: sidebarCollapsed ? '44px 1fr' : '320px 1fr', gap: 16, minHeight: 560 }}>
+        <div className="settings-rich" style={{ display: 'grid', gridTemplateColumns: sidebarCollapsed ? '44px minmax(0, 1fr)' : 'minmax(240px, 300px) minmax(0, 1fr)', gap: 16, minHeight: 560 }}>
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', background: C.surface }}>
             {sidebarCollapsed ? (
               <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 8, gap: 10 }}>
@@ -747,13 +854,14 @@ export const DashboardBuilderModal = ({
                 {/* Bottom Section: Dashboards */}
                 <div style={{ padding: 10, borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <div style={{ fontWeight: 700, fontSize: 12, color: C.textPrimary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Dashboards</div>
-                  <button onClick={startCreateDashboard} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}>+ New</button>
+                  <button onClick={startCreateDashboard} title={tip('createDashboard')} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}>+ New</button>
                 </div>
                 <div style={{ padding: '8px 10px', borderBottom: `1px solid ${C.border}` }}>
                   <input
                     value={dashboardSearch}
                     onChange={e => setDashboardSearch(e.target.value)}
                     placeholder="Search dashboards..."
+                    title={tip('dashboardSearch')}
                     style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 9px', fontSize: 12, outline: 'none' }}
                   />
                 </div>
@@ -784,7 +892,7 @@ export const DashboardBuilderModal = ({
             )}
           </div>
 
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface, overflow: 'hidden' }}>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface, overflow: 'hidden', minWidth: 0 }}>
             <div style={{ padding: 14, borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{isCreateMode ? 'Create Dashboard' : 'Dashboard Editor'}</div>
@@ -794,17 +902,18 @@ export const DashboardBuilderModal = ({
                 {sidebarCollapsed && (
                   <button
                     onClick={() => setSidebarCollapsed(false)}
+                    title="Show the dashboards/settings list on the left."
                     style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}
                   >
                     Show Dashboards
                   </button>
                 )}
                 {!isCreateMode && (
-                  <button onClick={() => dashboardDef?.slug && onNavigate(dashboardDef.slug)} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>
+                  <button title={tip('openDashboard')} onClick={() => dashboardDef?.slug && onNavigate(dashboardDef.slug)} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>
                     Open
                   </button>
                 )}
-                {isCreateMode && <button onClick={stopCreateMode} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>Cancel</button>}
+                {isCreateMode && <button title={tip('cancelCreate')} onClick={stopCreateMode} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>Cancel</button>}
               </div>
             </div>
 
@@ -812,15 +921,15 @@ export const DashboardBuilderModal = ({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted }}>Name *</span>
-                  <input value={form.name} onChange={e => setForm(prev => ({ ...prev, name: e.target.value, slug: prev.slug || slugify(e.target.value) }))} style={{ border: `1px solid ${formErrors.name ? C.red : C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                  <input title={tip('dashboardName')} value={form.name} onChange={e => setForm(prev => ({ ...prev, name: e.target.value, slug: prev.slug || slugify(e.target.value) }))} style={{ border: `1px solid ${formErrors.name ? C.red : C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 </label>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted }}>Slug *</span>
-                  <input value={form.slug} onChange={e => setForm(prev => ({ ...prev, slug: slugify(e.target.value) }))} style={{ border: `1px solid ${formErrors.slug ? C.red : C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                  <input title={tip('dashboardSlug')} value={form.slug} onChange={e => setForm(prev => ({ ...prev, slug: slugify(e.target.value) }))} style={{ border: `1px solid ${formErrors.slug ? C.red : C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 </label>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted }}>Audience</span>
-                  <select value={form.audience} onChange={e => setForm(prev => ({ ...prev, audience: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
+                  <select title={tip('audience')} value={form.audience} onChange={e => setForm(prev => ({ ...prev, audience: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
                     {AUDIENCE_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </label>
@@ -829,33 +938,33 @@ export const DashboardBuilderModal = ({
               <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr', gap: 10 }}>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted }}>Description</span>
-                  <input value={form.description} onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                  <input title={tip('description')} value={form.description} onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 </label>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted }}>Icon</span>
-                  <input value={form.icon} onChange={e => setForm(prev => ({ ...prev, icon: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                  <input title={tip('icon')} value={form.icon} onChange={e => setForm(prev => ({ ...prev, icon: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 </label>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted }}>Display order</span>
-                  <input type="number" value={form.display_order} onChange={e => setForm(prev => ({ ...prev, display_order: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                  <input type="number" title={tip('displayOrder')} value={form.display_order} onChange={e => setForm(prev => ({ ...prev, display_order: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 </label>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted }}>Refresh seconds</span>
-                  <input type="number" value={form.refresh_interval_seconds} onChange={e => setForm(prev => ({ ...prev, refresh_interval_seconds: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                  <input type="number" title={tip('refreshSeconds')} value={form.refresh_interval_seconds} onChange={e => setForm(prev => ({ ...prev, refresh_interval_seconds: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 </label>
               </div>
 
               <label style={{ display: 'grid', gap: 4 }}>
                 <span style={{ fontSize: 11, color: C.textMuted }}>Tags (comma separated)</span>
-                <input value={form.tags.join(', ')} onChange={e => setForm(prev => ({ ...prev, tags: parseTags(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input title={tip('tags')} value={form.tags.join(', ')} onChange={e => setForm(prev => ({ ...prev, tags: parseTags(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
               </label>
 
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <button onClick={saveDashboardMeta} disabled={savingDashboard} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', opacity: savingDashboard ? 0.65 : 1 }}>
+                <button title={tip('saveDashboard')} onClick={saveDashboardMeta} disabled={savingDashboard} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', opacity: savingDashboard ? 0.65 : 1 }}>
                   {savingDashboard ? 'Saving...' : isCreateMode ? 'Create dashboard' : 'Save metadata'}
                 </button>
                 {!isCreateMode && (
-                  <button onClick={handleDeleteDashboard} style={{ border: `1px solid ${C.red}`, background: C.redLight, color: C.red, borderRadius: 8, padding: '8px 12px', cursor: 'pointer' }}>
+                  <button title={tip('deleteDashboard')} onClick={handleDeleteDashboard} style={{ border: `1px solid ${C.red}`, background: C.redLight, color: C.red, borderRadius: 8, padding: '8px 12px', cursor: 'pointer' }}>
                     Delete dashboard
                   </button>
                 )}
@@ -871,10 +980,18 @@ export const DashboardBuilderModal = ({
                         value={cardSearch}
                         onChange={e => setCardSearch(e.target.value)}
                         placeholder="Search cards..."
+                        title={tip('cardSearch')}
                         style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: '6px 10px', fontSize: 12, minWidth: 180, outline: 'none' }}
                       />
-                      <button onClick={() => openCardBuilder()} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>+ Add Card</button>
-                      <button onClick={saveLayout} disabled={reorderSaving} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', opacity: reorderSaving ? 0.65 : 1 }}>
+                      <button title={tip('addCard')} onClick={() => openCardBuilder()} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>+ Add Card</button>
+                      <button
+                        onClick={resetLayoutIntelligently}
+                        title="Auto-fix layout values and reflow cards into a clean grid."
+                        style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}
+                      >
+                        Smart Reset Layout
+                      </button>
+                      <button title={tip('saveLayout')} onClick={saveLayout} disabled={reorderSaving} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', opacity: reorderSaving ? 0.65 : 1 }}>
                         {reorderSaving ? 'Saving...' : 'Save Layout'}
                       </button>
                     </div>
@@ -934,7 +1051,7 @@ export const DashboardBuilderModal = ({
                                 <input
                                   type="number"
                                   aria-label="Display order"
-                                  title="Display order: lower number appears earlier."
+                                  title={tip('displayOrder')}
                                   value={layout.display_order ?? card.display_order}
                                   onChange={e => setLayoutDrafts(prev => ({ ...prev, [card.slug]: { ...prev[card.slug], display_order: Number(e.target.value) } }))}
                                   style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 6px' }}
@@ -942,7 +1059,7 @@ export const DashboardBuilderModal = ({
                                 <input
                                   type="number"
                                   aria-label="Grid column start"
-                                  title="Grid column start (1-12): where the card begins."
+                                  title={tip('colStart')}
                                   value={layout.grid_col_start ?? card.grid_col_start}
                                   onChange={e => setLayoutDrafts(prev => ({ ...prev, [card.slug]: { ...prev[card.slug], grid_col_start: Number(e.target.value) } }))}
                                   style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 6px' }}
@@ -950,7 +1067,7 @@ export const DashboardBuilderModal = ({
                                 <input
                                   type="number"
                                   aria-label="Grid column span"
-                                  title="Grid column span (1-12): card width in columns."
+                                  title={tip('colSpan')}
                                   value={layout.grid_col_span ?? card.grid_col_span}
                                   onChange={e => setLayoutDrafts(prev => ({ ...prev, [card.slug]: { ...prev[card.slug], grid_col_span: Number(e.target.value) } }))}
                                   style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 6px' }}
@@ -958,14 +1075,14 @@ export const DashboardBuilderModal = ({
                                 <input
                                   type="number"
                                   aria-label="Grid row"
-                                  title="Grid row: vertical position of the card."
+                                  title={tip('row')}
                                   value={layout.grid_row ?? card.grid_row}
                                   onChange={e => setLayoutDrafts(prev => ({ ...prev, [card.slug]: { ...prev[card.slug], grid_row: Number(e.target.value) } }))}
                                   style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 6px' }}
                                 />
                                 <div style={{ display: 'flex', gap: 6 }}>
-                                  <button onClick={() => openCardBuilder(card)} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 11 }}>Edit</button>
-                                  <button onClick={() => removeCard(card)} style={{ border: `1px solid ${C.red}`, background: C.redLight, color: C.red, borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 11 }}>Delete</button>
+                                  <button title={tip('editCard')} onClick={() => openCardBuilder(card)} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 11 }}>Edit</button>
+                                  <button title={tip('deleteCard')} onClick={() => removeCard(card)} style={{ border: `1px solid ${C.red}`, background: C.redLight, color: C.red, borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 11 }}>Delete</button>
                                 </div>
                               </div>
                             );
@@ -1047,6 +1164,7 @@ export const DashboardBuilderModal = ({
                   order_json: '{}',
                 }))}
                 style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}
+                title={tip('cubeSelect')}
               >
                 <option value="">Select cube or view</option>
                 {cubes.map((c: any) => <option key={c.name} value={c.name}>{c.title || c.name}</option>)}
@@ -1062,7 +1180,7 @@ export const DashboardBuilderModal = ({
                 {(cubeMeta?.measures || []).map((m: any) => {
                   const checked = cardDraft.measures.includes(m.name);
                   return (
-                    <label key={m.name} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                    <label key={m.name} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }} title={tip('measureSelect')}>
                       <input
                         type="checkbox"
                         checked={checked}
@@ -1090,7 +1208,7 @@ export const DashboardBuilderModal = ({
                   const dimMeta = selectedCubeDimensions.find(x => x.name === d);
                   const checked = cardDraft.dimensions.includes(d);
                   return (
-                    <label key={d} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                    <label key={d} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }} title={tip('dimensionSelect')}>
                       <input
                         type="checkbox"
                         checked={checked}
@@ -1112,12 +1230,12 @@ export const DashboardBuilderModal = ({
                 Configure Display & Query
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                <input placeholder="Card title" value={cardDraft.title} onChange={e => setCardDraft((p: any) => ({ ...p, title: e.target.value, slug: p.slug || slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <input placeholder="Card slug" value={cardDraft.slug} onChange={e => setCardDraft((p: any) => ({ ...p, slug: slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <select value={cardDraft.chart_type} onChange={e => setCardDraft((p: any) => ({ ...p, chart_type: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
+                <input title={tip('cardTitle')} placeholder="Card title" value={cardDraft.title} onChange={e => setCardDraft((p: any) => ({ ...p, title: e.target.value, slug: p.slug || slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input title={tip('cardSlug')} placeholder="Card slug" value={cardDraft.slug} onChange={e => setCardDraft((p: any) => ({ ...p, slug: slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <select title={tip('chartType')} value={cardDraft.chart_type} onChange={e => setCardDraft((p: any) => ({ ...p, chart_type: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
                   {CHART_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
-                <select value={cardDraft.color_scheme} onChange={e => setCardDraft((p: any) => ({ ...p, color_scheme: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
+                <select title={tip('colorScheme')} value={cardDraft.color_scheme} onChange={e => setCardDraft((p: any) => ({ ...p, color_scheme: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
                   {COLOR_SCHEMES.map(c => (
                     <option key={c} value={c}>
                       {c === 'default' ? 'default (original)' : c}
@@ -1127,17 +1245,17 @@ export const DashboardBuilderModal = ({
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                <input placeholder="Subtitle" value={cardDraft.subtitle} onChange={e => setCardDraft((p: any) => ({ ...p, subtitle: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <input placeholder="Value prefix" value={cardDraft.value_prefix} onChange={e => setCardDraft((p: any) => ({ ...p, value_prefix: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <input placeholder="Value suffix" value={cardDraft.value_suffix} onChange={e => setCardDraft((p: any) => ({ ...p, value_suffix: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <input placeholder="X axis label" value={cardDraft.x_axis_label} onChange={e => setCardDraft((p: any) => ({ ...p, x_axis_label: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input title={tip('subtitle')} placeholder="Subtitle" value={cardDraft.subtitle} onChange={e => setCardDraft((p: any) => ({ ...p, subtitle: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input title={tip('valuePrefix')} placeholder="Value prefix" value={cardDraft.value_prefix} onChange={e => setCardDraft((p: any) => ({ ...p, value_prefix: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input title={tip('valueSuffix')} placeholder="Value suffix" value={cardDraft.value_suffix} onChange={e => setCardDraft((p: any) => ({ ...p, value_suffix: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input title={tip('xAxisLabel')} placeholder="X axis label" value={cardDraft.x_axis_label} onChange={e => setCardDraft((p: any) => ({ ...p, x_axis_label: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                <input placeholder="Y axis label" value={cardDraft.y_axis_label} onChange={e => setCardDraft((p: any) => ({ ...p, y_axis_label: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <input type="number" placeholder="Col start" title="Grid column start (1-12): where this card starts." value={cardDraft.grid_col_start} onChange={e => setCardDraft((p: any) => ({ ...p, grid_col_start: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <input type="number" placeholder="Col span" title="Grid column span (1-12): width of this card." value={cardDraft.grid_col_span} onChange={e => setCardDraft((p: any) => ({ ...p, grid_col_span: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <input type="number" placeholder="Row" title="Grid row: vertical placement in the dashboard." value={cardDraft.grid_row} onChange={e => setCardDraft((p: any) => ({ ...p, grid_row: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input title={tip('yAxisLabel')} placeholder="Y axis label" value={cardDraft.y_axis_label} onChange={e => setCardDraft((p: any) => ({ ...p, y_axis_label: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input type="number" placeholder="Col start" title={tip('colStart')} value={cardDraft.grid_col_start} onChange={e => setCardDraft((p: any) => ({ ...p, grid_col_start: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input type="number" placeholder="Col span" title={tip('colSpan')} value={cardDraft.grid_col_span} onChange={e => setCardDraft((p: any) => ({ ...p, grid_col_span: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
+                <input type="number" placeholder="Row" title={tip('row')} value={cardDraft.grid_row} onChange={e => setCardDraft((p: any) => ({ ...p, grid_row: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
               </div>
 
               <div style={{ display: 'grid', gap: 8 }}>
@@ -1155,6 +1273,7 @@ export const DashboardBuilderModal = ({
                             filter_rows: p.filter_rows.map((r: any, i: number) => i === idx ? { ...r, member: e.target.value } : r),
                           }))}
                           style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                          title={tip('filterField')}
                         >
                           <option value="">Filter field</option>
                           {selectedCubeDimensions.map(d => (
@@ -1168,6 +1287,7 @@ export const DashboardBuilderModal = ({
                             filter_rows: p.filter_rows.map((r: any, i: number) => i === idx ? { ...r, operator: e.target.value } : r),
                           }))}
                           style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                          title={tip('filterOperator')}
                         >
                           {FILTER_OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
                         </select>
@@ -1180,6 +1300,7 @@ export const DashboardBuilderModal = ({
                             filter_rows: p.filter_rows.map((r: any, i: number) => i === idx ? { ...r, value: e.target.value } : r),
                           }))}
                           style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12, opacity: requiresNoValue ? 0.6 : 1 }}
+                          title={tip('filterValue')}
                         />
                         <button
                           onClick={() => setCardDraft((p: any) => ({
@@ -1187,7 +1308,7 @@ export const DashboardBuilderModal = ({
                             filter_rows: (p.filter_rows || []).filter((_: any, i: number) => i !== idx),
                           }))}
                           style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontSize: 12 }}
-                          title="Remove filter"
+                          title={tip('removeFilter')}
                         >
                           Remove
                         </button>
@@ -1200,6 +1321,7 @@ export const DashboardBuilderModal = ({
                         ...p,
                         filter_rows: [...(p.filter_rows || []), { member: '', operator: 'equals', value: '' }],
                       }))}
+                      title={tip('addFilter')}
                       style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', fontSize: 12 }}
                     >
                       + Add Filter
@@ -1213,6 +1335,7 @@ export const DashboardBuilderModal = ({
                   value={cardDraft.time_dimension_member || ''}
                   onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_member: e.target.value }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                  title={tip('timeField')}
                 >
                   <option value="">No time grouping</option>
                   {timeDimensions.map(t => (
@@ -1223,6 +1346,7 @@ export const DashboardBuilderModal = ({
                   value={cardDraft.time_dimension_granularity || 'month'}
                   onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_granularity: e.target.value }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                  title={tip('timeGranularity')}
                 >
                   {TIME_GRANULARITIES.map(g => <option key={g} value={g}>{g}</option>)}
                 </select>
@@ -1231,12 +1355,14 @@ export const DashboardBuilderModal = ({
                   value={cardDraft.time_dimension_start || ''}
                   onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_start: e.target.value }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                  title={tip('startDate')}
                 />
                 <input
                   type="date"
                   value={cardDraft.time_dimension_end || ''}
                   onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_end: e.target.value }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                  title={tip('endDate')}
                 />
               </div>
 
@@ -1245,6 +1371,7 @@ export const DashboardBuilderModal = ({
                   value={cardDraft.order_member || ''}
                   onChange={e => setCardDraft((p: any) => ({ ...p, order_member: e.target.value }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                  title={tip('sortField')}
                 >
                   <option value="">No sorting</option>
                   {(cardDraft.measures || []).map((m: string) => (
@@ -1255,6 +1382,7 @@ export const DashboardBuilderModal = ({
                   value={cardDraft.order_direction || 'desc'}
                   onChange={e => setCardDraft((p: any) => ({ ...p, order_direction: e.target.value }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                  title={tip('sortDirection')}
                 >
                   <option value="desc">Descending</option>
                   <option value="asc">Ascending</option>
@@ -1262,40 +1390,40 @@ export const DashboardBuilderModal = ({
               </div>
 
               <details style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 }}>
-                <summary style={{ cursor: 'pointer', fontSize: 12, color: C.textMuted }}>Advanced JSON (optional)</summary>
+                <summary title={tip('advancedJson')} style={{ cursor: 'pointer', fontSize: 12, color: C.textMuted }}>Advanced JSON (optional)</summary>
                 <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
                     <div>
                       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Filters (JSON array)</div>
-                      <textarea rows={4} value={cardDraft.filters_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, filters_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+                      <textarea title={tip('filtersJson')} rows={4} value={cardDraft.filters_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, filters_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
                     </div>
                     <div>
                       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Time dimensions (JSON array)</div>
-                      <textarea rows={4} value={cardDraft.time_dimensions_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, time_dimensions_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+                      <textarea title={tip('timeJson')} rows={4} value={cardDraft.time_dimensions_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, time_dimensions_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Order (JSON object)</div>
-                    <textarea rows={2} value={cardDraft.order_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, order_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+                    <textarea title={tip('orderJson')} rows={2} value={cardDraft.order_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, order_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
                   </div>
                 </div>
               </details>
 
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><input type="checkbox" checked={cardDraft.show_legend} onChange={e => setCardDraft((p: any) => ({ ...p, show_legend: e.target.checked }))} /> Show legend</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><input type="checkbox" checked={cardDraft.show_data_labels} onChange={e => setCardDraft((p: any) => ({ ...p, show_data_labels: e.target.checked }))} /> Show data labels</label>
+                <label title={tip('showLegend')} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><input type="checkbox" checked={cardDraft.show_legend} onChange={e => setCardDraft((p: any) => ({ ...p, show_legend: e.target.checked }))} /> Show legend</label>
+                <label title={tip('showDataLabels')} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><input type="checkbox" checked={cardDraft.show_data_labels} onChange={e => setCardDraft((p: any) => ({ ...p, show_data_labels: e.target.checked }))} /> Show data labels</label>
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'sticky', bottom: 0, background: C.surface, borderTop: `1px solid ${C.border}`, paddingTop: 10, paddingBottom: 2, zIndex: 2 }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textMuted }}>
+              <label title={tip('autoPreview')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textMuted }}>
                 <input type="checkbox" checked={autoPreview} onChange={e => setAutoPreview(e.target.checked)} />
                 Auto-preview (500ms debounce)
               </label>
-              <button onClick={runPreview} disabled={previewLoading} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '8px 10px', cursor: 'pointer' }}>
+              <button title={tip('livePreview')} onClick={runPreview} disabled={previewLoading} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '8px 10px', cursor: 'pointer' }}>
                 {previewLoading ? 'Previewing...' : 'Live Preview'}
               </button>
-              <button onClick={saveCard} disabled={cardSaving} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', opacity: cardSaving ? 0.65 : 1 }}>
+              <button title={tip('saveCard')} onClick={saveCard} disabled={cardSaving} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', opacity: cardSaving ? 0.65 : 1 }}>
                 {cardSaving ? 'Saving...' : cardEditing ? 'Save Card' : 'Create Card'}
               </button>
               {(cardError || queryValidationError) && (

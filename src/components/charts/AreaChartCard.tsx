@@ -167,7 +167,12 @@ export const AreaChartCard = ({ card, onDrillDown, globalFilters = [], token = '
                   fill: s.color,
                   cursor: onDrillDown ? 'pointer' : 'default',
                   onClick: (_: any, payload: any) =>
-                    onDrillDown && onDrillDown(card, payload?.payload?.originalRow),
+                    onDrillDown && onDrillDown(card, {
+                      row: payload?.payload?.originalRow,
+                      activeDimension,
+                      currentMeasures,
+                      sourceChartType: 'area',
+                    }),
                 }}
               />
             ))}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { fetchDashboards, fetchDashboardData, fetchCubeMetadata, fetchDrilldowns, fetchAnalyticsQuery } from '../api';
 import { DashboardListItem, DashboardDataResponse, CardWithData, CubeDetail } from '../types/api';
 import { C } from '../lib/constants';
@@ -8,16 +8,17 @@ import { LineChartCard } from './charts/LineChartCard';
 import { TableCard } from './charts/TableCard';
 import { PieChartCard } from './charts/PieChartCard';
 import { AreaChartCard } from './charts/AreaChartCard';
+import { DrilldownView } from './charts/DrilldownView';
 import { AgentPanel } from './AgentPanel';
 import {
-  Sparkles, LogOut, X, TrendingUp, Filter, Megaphone, Package,
+  Sparkles, LogOut, TrendingUp, Filter, Megaphone, Package,
   Building2, Activity, LayoutDashboard, PieChart, DollarSign, Users, BarChart3, PenSquare, RefreshCw,
 } from 'lucide-react';
 import { inferQueryFields } from '../lib/utils';
-import { Modal } from './ui/Modal';
 import { Skeleton } from './ui/Skeleton';
 import { DashboardSkeleton } from './ui/DashboardSkeleton';
 import { DashboardBuilderModal } from './DashboardBuilderModal';
+import { Modal } from './ui/Modal';
 
 // ── Icon mapping for dashboard tabs ───────────────────────────────────────
 function getTabIcon(d: DashboardListItem): React.ElementType {
@@ -47,6 +48,27 @@ function getTabIcon(d: DashboardListItem): React.ElementType {
 }
 
 export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => void }) => {
+  type DrillPayload = {
+    row: any;
+    activeDimension?: string;
+    currentMeasures?: string[];
+    sourceChartType?: string;
+  };
+
+  type CardDrillState = {
+    open: boolean;
+    loading: boolean;
+    error: string;
+    data: any[];
+    query: any;
+    sourceDimension?: string;
+    targetDimension?: string;
+    availableDimensions: string[];
+    clickedValue?: string | null;
+    measures: string[];
+    lastPayload?: DrillPayload;
+  };
+
   const [dashboards, setDashboards] = useState<DashboardListItem[]>([]);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
   const [dashboardData, setDashboardData] = useState<DashboardDataResponse | null>(null);
@@ -56,20 +78,13 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
   const [showBuilder, setShowBuilder] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [globalFilters, setGlobalFilters] = useState<any[]>([]);
+  const globalFilters: any[] = [];
 
   // Map of cube name → full CubeDetail (measures + dimensions), fetched per unique cube
   const [cubeMetaMap, setCubeMetaMap] = useState<Record<string, CubeDetail>>({});
 
-  // Filter builder state
-  const [filterMember, setFilterMember] = useState('');
-  const [filterValue, setFilterValue] = useState('');
-  const filterValueRef = useRef<HTMLInputElement>(null);
-
-  const [drillState, setDrillState] = useState<{
-    open: boolean; card: CardWithData | null; row: any | null;
-    data: any[] | null; loading: boolean; error: string;
-  }>({ open: false, card: null, row: null, data: null, loading: false, error: '' });
+  const [drillStates, setDrillStates] = useState<Record<string, CardDrillState>>({});
+  const [kpiDrillModalCardKey, setKpiDrillModalCardKey] = useState<string | null>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -145,84 +160,204 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
   }, [dashboardData, token]);
 
   // ── Drill-down ─────────────────────────────────────────────────────────────
+  const getCardKey = (card: CardWithData) => String(card.id ?? card.slug);
 
-  const handleDrillDown = async (card: CardWithData, clickedRow: any) => {
-    setDrillState({ open: true, card, row: clickedRow, data: null, loading: true, error: '' });
+  const getCubeScopedGlobalFilters = (_cubeName: string) => [];
+
+  const resolveDimensionKeyFromRow = (
+    row: any,
+    preferredDim: string | undefined,
+    measures: string[],
+  ) => {
+    if (!row || typeof row !== 'object') return preferredDim || '';
+    if (preferredDim && Object.prototype.hasOwnProperty.call(row, preferredDim)) return preferredDim;
+    if (preferredDim) {
+      const preferredShort = preferredDim.split('.').pop();
+      const byShort = Object.keys(row).find(k => k.split('.').pop() === preferredShort);
+      if (byShort) return byShort;
+    }
+    const nonMeasureKeys = Object.keys(row).filter(k => !measures.includes(k));
+    return nonMeasureKeys[0] || preferredDim || '';
+  };
+
+  const rankDrillDimensions = (dims: string[]) => {
+    const isIdentifierLike = (d: string) => {
+      const k = d.toLowerCase();
+      return (
+        k.endsWith('.id') ||
+        k.includes('_id') ||
+        k.includes('uuid') ||
+        k.includes('guid') ||
+        k.includes('key')
+      );
+    };
+    return [...dims].sort((a, b) => Number(isIdentifierLike(a)) - Number(isIdentifierLike(b)));
+  };
+
+  const runDrillQueryForCard = async (card: CardWithData, payload: DrillPayload, forcedTargetDimension?: string) => {
+    const cardKey = getCardKey(card);
+    const baseQuery = card.cube_query || inferQueryFields(card.data);
+    const measures: string[] = payload.currentMeasures?.length
+      ? payload.currentMeasures
+      : (baseQuery.measures || []);
+    const cubeName = measures[0]?.split('.')[0] || '';
+
+    if (!measures.length || !cubeName) {
+      setDrillStates(prev => ({
+        ...prev,
+        [cardKey]: {
+          open: true,
+          loading: false,
+          error: 'Drilldown is not available for this card.',
+          data: [],
+          query: {},
+          availableDimensions: [],
+          measures: [],
+        },
+      }));
+      return;
+    }
+
+    const sourceDimCandidate = payload.activeDimension || baseQuery.dimensions?.[0] || '';
+    const sourceDimension = resolveDimensionKeyFromRow(payload.row, sourceDimCandidate, measures);
+    const clickedValue = sourceDimension ? payload.row?.[sourceDimension] : null;
+
+    setDrillStates(prev => ({
+      ...prev,
+      [cardKey]: {
+        ...(prev[cardKey] || {
+          open: true,
+          loading: true,
+          error: '',
+          data: [],
+          query: {},
+          availableDimensions: [],
+          measures,
+        }),
+        open: true,
+        loading: true,
+        error: '',
+        measures,
+      },
+    }));
 
     try {
-      const { dimensions, measures } = card.cube_query || inferQueryFields(card.data);
-      const cubeName = measures[0]?.split('.')[0];
-
-      // Fetch valid drilldown dimensions from the API — no more hardcoded maps
       const drilldownsData = await fetchDrilldowns(cubeName, token);
       const measureEntry = drilldownsData.drilldowns?.find((d: any) => d.measure === measures[0]);
-      const validDims: string[] = (measureEntry?.valid_dimensions ?? []).map((d: any) => d.name);
+      const validDimsRaw: string[] = (measureEntry?.valid_dimensions ?? []).map((d: any) => d.name);
+      const validDims = rankDrillDimensions(validDimsRaw);
+      const targetDimension =
+        forcedTargetDimension ||
+        validDims.find(d => d !== sourceDimension) ||
+        (sourceDimension && validDims.includes(sourceDimension) ? sourceDimension : validDims[0] || '');
 
-      let drillQuery: any;
+      const baseFilters = [...(baseQuery.filters || []), ...getCubeScopedGlobalFilters(cubeName)];
+      const clickedFilter = sourceDimension
+        ? (
+          clickedValue !== null && clickedValue !== undefined
+            ? { member: sourceDimension, operator: 'equals', values: [String(clickedValue)] }
+            : { member: sourceDimension, operator: 'notSet' }
+        )
+        : null;
 
-      if (card.chart_type === 'kpi' || dimensions.length === 0) {
-        // KPI: break out by first two valid dimensions from the drilldowns endpoint
-        const drillDims = validDims.slice(0, 2);
-        drillQuery = {
-          measures,
-          dimensions: drillDims.length > 0 ? drillDims : [],
-          order: { [measures[0]]: 'desc' },
-          limit: 50,
-        };
-      } else {
-        const dimensionKey = dimensions[0];
-        const clickedValue = clickedRow?.[dimensionKey] ?? null;
-
-        // Pick the next dimension from the valid list (one step deeper in the hierarchy)
-        const currentIdx = validDims.indexOf(dimensionKey);
-        const nextDim = validDims.find((_, i) => i !== currentIdx) ?? null;
-
-        drillQuery = {
-          measures,
-          dimensions: nextDim && nextDim !== dimensionKey
-            ? [dimensionKey, nextDim]
-            : [dimensionKey],
-          filters: [
-            ...(card.cube_query?.filters ?? []),
-            clickedValue !== null && clickedValue !== undefined
-              ? { member: dimensionKey, operator: 'equals', values: [String(clickedValue)] }
-              : { member: dimensionKey, operator: 'notSet' },
-          ],
-          order: { [measures[0]]: 'desc' },
-          limit: 50,
-        };
-      }
+      const drillQuery: any = {
+        measures,
+        dimensions: targetDimension ? [targetDimension] : [],
+        filters: clickedFilter ? [...baseFilters, clickedFilter] : baseFilters,
+        time_dimensions: baseQuery.time_dimensions || [],
+        order: { [measures[0]]: 'desc' },
+        limit: 50,
+        offset: 0,
+      };
 
       const res = await fetchAnalyticsQuery(drillQuery, token);
-      setDrillState(prev => ({
+      const rows = Array.isArray(res) ? res : res.data ?? res ?? [];
+
+      setDrillStates(prev => ({
         ...prev,
-        data: Array.isArray(res) ? res : res.data ?? res,
-        loading: false,
+        [cardKey]: {
+          open: true,
+          loading: false,
+          error: '',
+          data: rows,
+          query: drillQuery,
+          sourceDimension,
+          targetDimension,
+          availableDimensions: validDims,
+          clickedValue: clickedValue === null || clickedValue === undefined ? null : String(clickedValue),
+          measures,
+          lastPayload: payload,
+        },
       }));
     } catch (err: any) {
-      setDrillState(prev => ({ ...prev, loading: false, error: err.message }));
+      setDrillStates(prev => ({
+        ...prev,
+        [cardKey]: {
+          open: true,
+          loading: false,
+          error: err.message || 'Drilldown failed',
+          data: [],
+          query: prev[cardKey]?.query || {},
+          sourceDimension,
+          targetDimension: prev[cardKey]?.targetDimension,
+          availableDimensions: prev[cardKey]?.availableDimensions || [],
+          clickedValue: clickedValue === null || clickedValue === undefined ? null : String(clickedValue),
+          measures,
+          lastPayload: payload,
+        },
+      }));
     }
   };
 
-  // ── Global filter helpers ──────────────────────────────────────────────────
+  const handleDrillDown = async (card: CardWithData, payloadOrRow: DrillPayload | any) => {
+    const payload: DrillPayload = payloadOrRow && payloadOrRow.row
+      ? payloadOrRow
+      : { row: payloadOrRow };
+    if (card.chart_type === 'kpi') {
+      setKpiDrillModalCardKey(getCardKey(card));
+    }
+    await runDrillQueryForCard(card, payload);
+  };
 
-  // Collect all string-type dimensions across every fetched cube for the filter picker
-  const allStringDimensions = useMemo(
-    () => Object.values(cubeMetaMap).flatMap(meta =>
-      (meta.dimensions ?? []).filter(d => d.type === 'string')
-    ),
-    [cubeMetaMap],
-  );
+  const handleBackFromDrill = (card: CardWithData) => {
+    const cardKey = getCardKey(card);
+    if (kpiDrillModalCardKey === cardKey) {
+      setKpiDrillModalCardKey(null);
+    }
+    setDrillStates(prev => {
+      const next = { ...prev };
+      delete next[cardKey];
+      return next;
+    });
+  };
 
-  const applyPendingFilter = () => {
-    const val = filterValue.trim();
-    if (!filterMember || !val) return;
-    setGlobalFilters(prev => [
-      ...prev.filter(f => f.member !== filterMember),
-      { member: filterMember, operator: 'equals', values: [val] },
-    ]);
-    setFilterMember('');
-    setFilterValue('');
+  const handleRetryDrill = async (card: CardWithData) => {
+    const cardKey = getCardKey(card);
+    const state = drillStates[cardKey];
+    if (!state?.query) return;
+    setDrillStates(prev => ({
+      ...prev,
+      [cardKey]: { ...state, loading: true, error: '' },
+    }));
+    try {
+      const res = await fetchAnalyticsQuery(state.query, token);
+      const rows = Array.isArray(res) ? res : res.data ?? res ?? [];
+      setDrillStates(prev => ({
+        ...prev,
+        [cardKey]: { ...state, loading: false, error: '', data: rows },
+      }));
+    } catch (err: any) {
+      setDrillStates(prev => ({
+        ...prev,
+        [cardKey]: { ...state, loading: false, error: err.message || 'Retry failed' },
+      }));
+    }
+  };
+
+  const handleSelectDrillDimension = async (card: CardWithData, dimension: string) => {
+    const state = drillStates[getCardKey(card)];
+    if (!state?.lastPayload || !dimension) return;
+    await runDrillQueryForCard(card, state.lastPayload, dimension);
   };
 
   // ── Card rendering ─────────────────────────────────────────────────────────
@@ -232,6 +367,26 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
     const meta = cubeMetaMap[cubeName];
     const dimensionOptions = (meta?.dimensions ?? []).filter(d => d.type === 'string');
     const props = { card, onDrillDown: handleDrillDown, globalFilters, token, dimensionOptions };
+    const drill = drillStates[getCardKey(card)];
+
+    if (drill?.open && card.chart_type !== 'kpi') {
+      return (
+        <DrilldownView
+          card={card}
+          loading={drill.loading}
+          error={drill.error}
+          rows={drill.data}
+          measures={drill.measures}
+          sourceDimension={drill.sourceDimension}
+          targetDimension={drill.targetDimension}
+          availableDimensions={drill.availableDimensions}
+          clickedValue={drill.clickedValue}
+          onSelectDimension={(dimension) => handleSelectDrillDimension(card, dimension)}
+          onBack={() => handleBackFromDrill(card)}
+          onRetry={() => handleRetryDrill(card)}
+        />
+      );
+    }
 
     switch (card.chart_type) {
       case 'kpi':   return <KPITile {...props} />;
@@ -251,6 +406,13 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
   };
 
   // Decode user initial from JWT payload for the avatar
+  const kpiDrillCard = useMemo(
+    () => dashboardData?.cards.find(c => getCardKey(c) === kpiDrillModalCardKey && c.chart_type === 'kpi') ?? null,
+    [dashboardData, kpiDrillModalCardKey],
+  );
+
+  const kpiDrillState = kpiDrillCard ? drillStates[getCardKey(kpiDrillCard)] : undefined;
+
   const userInitial = useMemo(() => {
     try {
       const payload = JSON.parse(atob(token.split('.')[1]));
@@ -427,74 +589,6 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
               )}
             </div>
 
-            {/* Global Filter Pills + Builder */}
-            <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              {/* Active filter pills */}
-              {globalFilters.map((f, i) => (
-                <span
-                  key={i}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.surface, border: `1px solid ${C.border}`, padding: '4px 10px', borderRadius: 16, fontSize: 12, fontFamily: "'Inter', sans-serif", color: C.textPrimary, fontWeight: 500 }}
-                >
-                  <span style={{ color: C.textMuted }}>{f.member.split('.').pop()}:</span>
-                  <strong style={{ color: C.blue }}>{f.values[0]}</strong>
-                  <button
-                    onClick={() => setGlobalFilters(prev => prev.filter((_, idx) => idx !== i))}
-                    style={{ background: 'none', border: 'none', color: C.textMuted, cursor: 'pointer', padding: 0, marginLeft: 2, display: 'flex', alignItems: 'center' }}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-
-              {/* Filter builder — dimension picker */}
-              {allStringDimensions.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <select
-                    value={filterMember}
-                    onChange={e => {
-                      setFilterMember(e.target.value);
-                      setFilterValue('');
-                      setTimeout(() => filterValueRef.current?.focus(), 0);
-                    }}
-                    style={{ background: 'transparent', border: `1px dashed ${C.textMuted}`, color: C.textMuted, padding: '4px 10px', borderRadius: 16, fontSize: 12, fontFamily: "'Inter', sans-serif", outline: 'none', cursor: 'pointer', height: 26 }}
-                  >
-                    <option value="">+ Add Filter</option>
-                    {allStringDimensions.map(d => (
-                      <option key={d.name} value={d.name}>
-                        {d.shortTitle || d.name.split('.').pop()}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* Value input — appears once a dimension is chosen */}
-                  {filterMember && (
-                    <>
-                      <input
-                        ref={filterValueRef}
-                        value={filterValue}
-                        onChange={e => setFilterValue(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') applyPendingFilter(); if (e.key === 'Escape') { setFilterMember(''); setFilterValue(''); } }}
-                        placeholder="Value…"
-                        style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: '3px 10px', fontSize: 12, fontFamily: "'Inter', sans-serif", outline: 'none', height: 26, width: 120, color: C.textPrimary, background: C.surface }}
-                      />
-                      <button
-                        onClick={applyPendingFilter}
-                        disabled={!filterValue.trim()}
-                        style={{ background: C.blue, color: '#fff', border: 'none', borderRadius: 12, padding: '3px 12px', fontSize: 12, fontFamily: "'Inter', sans-serif", cursor: filterValue.trim() ? 'pointer' : 'not-allowed', height: 26, opacity: filterValue.trim() ? 1 : 0.5 }}
-                      >
-                        Apply
-                      </button>
-                      <button
-                        onClick={() => { setFilterMember(''); setFilterValue(''); }}
-                        style={{ background: 'none', border: 'none', color: C.textMuted, cursor: 'pointer', padding: '0 4px', fontSize: 16, lineHeight: 1 }}
-                      >
-                        ×
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
           </div>
 
           {/* Dashboard Content grid */}
@@ -547,74 +641,35 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
         }}
       />
 
-      {/* Drill Down Modal */}
       <Modal
-        open={drillState.open}
-        onClose={() => setDrillState(prev => ({ ...prev, open: false }))}
-        title={`Drill Down: ${drillState.card?.title || 'Details'}`}
-        subtitle={drillState.row ? 'Filtered by segment' : undefined}
+        open={!!kpiDrillCard && !!kpiDrillState?.open}
+        onClose={() => {
+          if (kpiDrillCard) handleBackFromDrill(kpiDrillCard);
+        }}
+        title="KPI Drilldown"
+        subtitle="Detailed metric breakdown"
+        width={920}
       >
-        {drillState.loading ? (
-          <div style={{ overflowX: 'auto', width: '100%' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  {[60, 40, 80].map((w, i) => (
-                    <th key={i} style={{ padding: '8px 12px', borderBottom: `1px solid ${C.border}` }}>
-                      <Skeleton width={`${w}%`} height={14} />
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i} style={{ borderBottom: `1px solid ${C.surfaceAlt}` }}>
-                    {[80, 100, 60].map((w, j) => (
-                      <td key={j} style={{ padding: '12px' }}><Skeleton width={`${w}%`} height={16} /></td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {kpiDrillCard && kpiDrillState ? (
+          <div style={{ minHeight: 380 }}>
+            <DrilldownView
+              card={kpiDrillCard}
+              loading={kpiDrillState.loading}
+              error={kpiDrillState.error}
+              rows={kpiDrillState.data}
+              measures={kpiDrillState.measures}
+              sourceDimension={kpiDrillState.sourceDimension}
+              targetDimension={kpiDrillState.targetDimension}
+              availableDimensions={kpiDrillState.availableDimensions}
+              clickedValue={kpiDrillState.clickedValue}
+              onSelectDimension={(dimension) => handleSelectDrillDimension(kpiDrillCard, dimension)}
+              onBack={() => handleBackFromDrill(kpiDrillCard)}
+              onRetry={() => handleRetryDrill(kpiDrillCard)}
+            />
           </div>
-        ) : drillState.error ? (
-          <div style={{ background: C.redLight, color: C.red, padding: '20px', borderRadius: 8, margin: '20px 0', fontSize: 14, fontFamily: "'Inter', sans-serif", border: `1px solid ${C.red}` }}>
-            <strong style={{ display: 'block', marginBottom: 4 }}>Drill-down Failed</strong>
-            {drillState.error}
-          </div>
-        ) : drillState.data && drillState.data.length > 0 ? (
-          <div style={{ overflowX: 'auto', maxHeight: 400 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, fontFamily: "'Inter', sans-serif" }}>
-              <thead>
-                <tr>
-                  {Object.keys(drillState.data[0]).map(col => (
-                    <th key={col} style={{ textAlign: 'left', padding: '8px 12px', borderBottom: `1px solid ${C.border}`, color: C.textMuted, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      {col.split('.').pop()?.replace(/_/g, ' ')}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {drillState.data.map((r: any, i: number) => (
-                  <tr key={i} style={{ borderBottom: `1px solid ${C.surfaceAlt}` }}>
-                    {Object.keys(drillState.data![0]).map(col => (
-                      <td key={col} style={{ padding: '8px 12px', color: C.textPrimary }}>
-                        {r[col] === null
-                          ? <span style={{ color: C.amber, fontWeight: 500 }}>Unassigned</span>
-                          : String(r[col])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div style={{ padding: 40, textAlign: 'center', color: C.textMuted }}>
-            No data found for this segment.
-          </div>
-        )}
+        ) : null}
       </Modal>
+
     </div>
   );
 };

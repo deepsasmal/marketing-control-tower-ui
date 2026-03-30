@@ -4,7 +4,7 @@ import { C } from '../../lib/constants';
 export const ChartTooltipStyle = {
   background: C.surface, border: `1px solid ${C.border}`,
   borderRadius: 8, padding: "8px 12px",
-  fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 11, fontFamily: "'Inter', sans-serif",
   boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
 };
 

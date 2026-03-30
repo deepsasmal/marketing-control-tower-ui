@@ -48,7 +48,12 @@ export const KPITile = ({ card, onDrillDown }: { card: CardWithData, onDrillDown
   return (
     <Card
       style={{ padding: "18px 20px", height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', cursor: onDrillDown ? 'pointer' : 'default' }}
-      onClick={() => onDrillDown && onDrillDown(card, card.data[0])}
+      onClick={() => onDrillDown && onDrillDown(card, {
+        row: card.data[0],
+        activeDimension: (card.cube_query || inferQueryFields(card.data)).dimensions?.[0],
+        currentMeasures: measures,
+        sourceChartType: 'kpi',
+      })}
     >
       <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, letterSpacing: "0.08em", color: C.textMuted, textTransform: "uppercase", marginBottom: 10 }}>
         {card.description ? <MetricLabel label={card.title} tooltip={card.description} /> : card.title}

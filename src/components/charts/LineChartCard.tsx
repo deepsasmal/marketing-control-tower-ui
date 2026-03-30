@@ -42,15 +42,24 @@ export const LineChartCard = ({ card, onDrillDown, globalFilters = [], token = '
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 10, right: 10, bottom: 20, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={v => `${card.value_prefix || ''}${v}${card.value_suffix || ''}`} />
+            <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} axisLine={false} tickLine={false} tickFormatter={v => `${card.value_prefix || ''}${v}${card.value_suffix || ''}`} />
             <Tooltip content={<CustomTooltip prefix={card.value_prefix || ''} suffix={card.value_suffix || ''} />} />
-            {card.show_legend && <Legend iconType="circle" iconSize={7} wrapperStyle={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }} />}
+            {card.show_legend && <Legend iconType="circle" iconSize={7} wrapperStyle={{ fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} />}
             {lines.map((l: any) => (
               <Line
                 key={l.dataKey} type="monotone" dataKey={l.dataKey} name={l.name} stroke={l.color} strokeWidth={2}
                 dot={{ r: 3, fill: l.color }}
-                activeDot={{ r: 6, cursor: onDrillDown ? 'pointer' : 'default', onClick: (e: any) => onDrillDown && onDrillDown(card, e.payload.originalRow) }}
+                activeDot={{
+                  r: 6,
+                  cursor: onDrillDown ? 'pointer' : 'default',
+                  onClick: (e: any) => onDrillDown && onDrillDown(card, {
+                    row: e.payload.originalRow,
+                    activeDimension,
+                    currentMeasures,
+                    sourceChartType: 'line',
+                  }),
+                }}
               />
             ))}
           </LineChart>

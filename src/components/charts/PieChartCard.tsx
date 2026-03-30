@@ -45,7 +45,12 @@ export const PieChartCard = ({ card, onDrillDown, globalFilters = [], token = ''
                             dataKey="value"
                             stroke={C.surface}
                             strokeWidth={2}
-                            onClick={(entry: any) => onDrillDown && onDrillDown(card, entry.payload.originalRow)}
+                            onClick={(entry: any) => onDrillDown && onDrillDown(card, {
+                                row: entry.payload.originalRow,
+                                activeDimension: dimToUse,
+                                currentMeasures,
+                                sourceChartType: card.chart_type === 'donut' ? 'donut' : 'pie',
+                            })}
                             style={{ cursor: onDrillDown ? 'pointer' : 'default', outline: 'none' }}
                         >
                             {chartData.map((entry: any, index: number) => (

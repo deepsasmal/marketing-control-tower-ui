@@ -34,14 +34,19 @@ export const BarChartCard = ({ card, onDrillDown, globalFilters = [], token = ''
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 10, right: 10, bottom: 20, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-            <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={v => `${card.value_prefix || ''}${v}${card.value_suffix || ''}`} />
+            <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} axisLine={false} tickLine={false} tickFormatter={v => `${card.value_prefix || ''}${v}${card.value_suffix || ''}`} />
             <Tooltip content={<CustomTooltip prefix={card.value_prefix || ''} suffix={card.value_suffix || ''} />} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
             <Bar
               dataKey="value"
               fill={(C as any)[card.color_scheme] || C.blue}
               radius={[4, 4, 0, 0]}
-              onClick={(entry) => onDrillDown && onDrillDown(card, entry.originalRow)}
+              onClick={(entry) => onDrillDown && onDrillDown(card, {
+                row: entry.originalRow,
+                activeDimension: dimToUse,
+                currentMeasures,
+                sourceChartType: 'bar',
+              })}
               style={{ cursor: onDrillDown ? 'pointer' : 'default' }}
             />
           </BarChart>

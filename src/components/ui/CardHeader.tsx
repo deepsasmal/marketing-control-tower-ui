@@ -9,7 +9,7 @@ export const CardHeader = ({ title, subtitle, right, noBorder = false }: { title
   }}>
     <div>
       <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, fontFamily: "'Outfit', sans-serif" }}>{title}</div>
-      {subtitle && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1, fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.04em" }}>{subtitle}</div>}
+      {subtitle && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2, fontFamily: "'Inter', sans-serif", fontWeight: 500 }}>{subtitle}</div>}
     </div>
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>{right}</div>
   </div>
