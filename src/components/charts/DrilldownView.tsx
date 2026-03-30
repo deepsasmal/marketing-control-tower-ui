@@ -11,6 +11,7 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
+import { ArrowLeft } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { CardHeader } from '../ui/CardHeader';
 import { Skeleton } from '../ui/Skeleton';
@@ -30,6 +31,7 @@ type DrilldownViewProps = {
   onSelectDimension: (dimension: string) => void;
   onBack: () => void;
   onRetry: () => void;
+  frameless?: boolean;
 };
 
 const SERIES_COLORS = [C.blue, C.green, C.purple, C.amber, C.black];
@@ -67,6 +69,7 @@ export const DrilldownView = ({
   onSelectDimension,
   onBack,
   onRetry,
+  frameless = false,
 }: DrilldownViewProps) => {
   const preview = rows?.[0] || null;
 
@@ -103,40 +106,54 @@ export const DrilldownView = ({
   const showBar = primaryDimension && measures.length === 1 && !isTimeLikeDimension(primaryDimension);
   const showLine = primaryDimension && (measures.length > 1 || isTimeLikeDimension(primaryDimension));
 
-  return (
-    <Card style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <CardHeader
-        title={`${card.title} — Drilldown`}
-        subtitle={
-          sourceDimension
-            ? `${shortKey(sourceDimension)}${clickedValue ? ` = ${shortLabel(String(clickedValue), 28)}` : ''}`
-            : 'Detailed breakdown'
-        }
-        right={(
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {availableDimensions.length > 0 && (
-              <select
-                value={targetDimension || ''}
-                onChange={e => onSelectDimension(e.target.value)}
-                style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: '4px 8px', fontSize: 11, color: C.textPrimary, maxWidth: 190 }}
-                title="Choose drill-down dimension"
-              >
-                {availableDimensions.map(d => (
-                  <option key={d} value={d}>{shortKey(d).replace(/_/g, ' ')}</option>
-                ))}
-              </select>
-            )}
-            <button
-              onClick={onBack}
-              style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 12, color: C.textPrimary }}
+  const header = (
+    <CardHeader
+      title={`${card.title} — Drilldown`}
+      subtitle={
+        sourceDimension
+          ? `${shortKey(sourceDimension)}${clickedValue ? ` = ${shortLabel(String(clickedValue), 28)}` : ''}`
+          : 'Detailed breakdown'
+      }
+      right={(
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {availableDimensions.length > 0 && (
+            <select
+              value={targetDimension || ''}
+              onChange={e => onSelectDimension(e.target.value)}
+              style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: '4px 8px', fontSize: 11, color: C.textPrimary, maxWidth: 190 }}
+              title="Choose drill-down dimension"
             >
-              Back
-            </button>
-          </div>
-        )}
-      />
+              {availableDimensions.map(d => (
+                <option key={d} value={d}>{shortKey(d).replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={onBack}
+            title="Back to original card"
+            aria-label="Back to original card"
+            style={{
+              width: 30,
+              height: 30,
+              border: `1px solid ${C.border}`,
+              background: C.surfaceAlt,
+              borderRadius: 8,
+              cursor: 'pointer',
+              color: C.textPrimary,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <ArrowLeft size={14} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+    />
+  );
 
-      <div style={{ flex: 1, padding: '14px 16px', minHeight: 220 }}>
+  const content = (
+    <div style={{ flex: 1, padding: frameless ? '10px 2px 2px 2px' : '14px 16px', minHeight: 220 }}>
         {loading ? (
           <div style={{ display: 'grid', gap: 10 }}>
             <Skeleton height={14} width="45%" />
@@ -215,6 +232,17 @@ export const DrilldownView = ({
           </div>
         )}
       </div>
+  );
+
+  return frameless ? (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {header}
+      {content}
+    </div>
+  ) : (
+    <Card style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {header}
+      {content}
     </Card>
   );
 };

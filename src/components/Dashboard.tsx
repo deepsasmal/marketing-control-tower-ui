@@ -665,6 +665,7 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
               onSelectDimension={(dimension) => handleSelectDrillDimension(kpiDrillCard, dimension)}
               onBack={() => handleBackFromDrill(kpiDrillCard)}
               onRetry={() => handleRetryDrill(kpiDrillCard)}
+              frameless
             />
           </div>
         ) : null}
