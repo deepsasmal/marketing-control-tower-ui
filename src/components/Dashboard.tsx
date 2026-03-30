@@ -321,7 +321,7 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
             }}
           >
             <PenSquare size={14} strokeWidth={2} />
-            Edit
+            Settings
           </button>
 
           <button

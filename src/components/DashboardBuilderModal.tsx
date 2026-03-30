@@ -17,6 +17,7 @@ import {
 } from '../api';
 import { C } from '../lib/constants';
 import { Modal } from './ui/Modal';
+import { CubeSchemaEditorModal } from './CubeSchemaEditorModal';
 import {
   ResponsiveContainer,
   BarChart,
@@ -49,6 +50,8 @@ type BuilderProps = {
 const AUDIENCE_OPTIONS = ['executive', 'sales', 'marketing', 'ops'];
 const CHART_TYPES = ['kpi', 'bar', 'line', 'pie', 'donut', 'area', 'table', 'scatter'];
 const COLOR_SCHEMES = ['default', 'blue', 'green', 'red', 'purple', 'orange', 'teal'];
+const FILTER_OPERATORS = ['equals', 'notEquals', 'contains', 'gt', 'gte', 'lt', 'lte', 'set', 'notSet', 'inDateRange'];
+const TIME_GRANULARITIES = ['second', 'minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'];
 const SLUG_REGEX = /^[a-z0-9-]{3,100}$/;
 
 const emptyDashboard = {
@@ -85,6 +88,34 @@ function jsonSafeParse(input: string, fallback: any): any {
   } catch {
     return fallback;
   }
+}
+
+function toFilterRows(filters: any[]): Array<{ member: string; operator: string; value: string }> {
+  if (!Array.isArray(filters)) return [];
+  return filters.map((f: any) => ({
+    member: String(f?.member || ''),
+    operator: String(f?.operator || 'equals'),
+    value: String(Array.isArray(f?.values) ? (f.values[0] ?? '') : ''),
+  }));
+}
+
+function toQueryFilters(rows: Array<{ member: string; operator: string; value: string }>): any[] {
+  return rows
+    .filter(r => r.member && r.operator)
+    .map(r => {
+      if (r.operator === 'set' || r.operator === 'notSet') {
+        return { member: r.member, operator: r.operator };
+      }
+      return { member: r.member, operator: r.operator, values: [r.value] };
+    });
+}
+
+function extractSort(orderObj: Record<string, string>): { member: string; direction: 'asc' | 'desc' } {
+  const [member, direction] = Object.entries(orderObj || {})[0] || [];
+  return {
+    member: member || '',
+    direction: direction === 'asc' ? 'asc' : 'desc',
+  };
 }
 
 function getSchemeColor(scheme?: string): string {
@@ -159,6 +190,7 @@ export const DashboardBuilderModal = ({
   const [dashboardSearch, setDashboardSearch] = useState('');
   const [cardSearch, setCardSearch] = useState('');
   const [autoPreview, setAutoPreview] = useState(true);
+  const [schemaEditorOpen, setSchemaEditorOpen] = useState(false);
 
   const loadDashboards = async () => {
     setLoadingList(true);
@@ -319,6 +351,9 @@ export const DashboardBuilderModal = ({
       offset: 0,
     };
     const cubeName = (initialQuery.measures?.[0] || '').split('.')[0] || '';
+    const parsedFilters = toFilterRows(initialQuery.filters || []);
+    const firstTimeDimension = (initialQuery.time_dimensions || [])[0] || {};
+    const parsedSort = extractSort(initialQuery.order || {});
     setCardEditing(card ?? null);
     setCardDraft({
       slug: card?.slug || '',
@@ -340,10 +375,18 @@ export const DashboardBuilderModal = ({
       cube_name: cubeName,
       measures: initialQuery.measures || [],
       dimensions: initialQuery.dimensions || [],
-      filters_json: JSON.stringify(initialQuery.filters || [], null, 2),
-      time_dimensions_json: JSON.stringify(initialQuery.time_dimensions || [], null, 2),
+      filter_rows: parsedFilters.length > 0 ? parsedFilters : [{ member: '', operator: 'equals', value: '' }],
+      time_dimension_member: firstTimeDimension.dimension || '',
+      time_dimension_granularity: firstTimeDimension.granularity || 'month',
+      time_dimension_start: Array.isArray(firstTimeDimension.dateRange) ? (firstTimeDimension.dateRange[0] || '') : '',
+      time_dimension_end: Array.isArray(firstTimeDimension.dateRange) ? (firstTimeDimension.dateRange[1] || '') : '',
       limit: Number(initialQuery.limit ?? 1000),
       offset: Number(initialQuery.offset ?? 0),
+      order_member: parsedSort.member,
+      order_direction: parsedSort.direction,
+      advanced_mode: false,
+      filters_json: JSON.stringify(initialQuery.filters || [], null, 2),
+      time_dimensions_json: JSON.stringify(initialQuery.time_dimensions || [], null, 2),
       order_json: JSON.stringify(initialQuery.order || {}, null, 2),
     });
     setCardError('');
@@ -369,6 +412,36 @@ export const DashboardBuilderModal = ({
     return sets.reduce((acc: string[], cur: string[]) => acc.filter(v => cur.includes(v)));
   }, [cardDraft?.measures, drilldowns]);
 
+  const queryPartsFromDraft = useMemo(() => {
+    if (!cardDraft) return { filters: [], time_dimensions: [], order: {} };
+
+    if (cardDraft.advanced_mode) {
+      return {
+        filters: jsonSafeParse(cardDraft.filters_json || '[]', []),
+        time_dimensions: jsonSafeParse(cardDraft.time_dimensions_json || '[]', []),
+        order: jsonSafeParse(cardDraft.order_json || '{}', {}),
+      };
+    }
+
+    const filters = toQueryFilters(cardDraft.filter_rows || []);
+    const time_dimensions =
+      cardDraft.time_dimension_member && cardDraft.time_dimension_granularity
+        ? [{
+            dimension: cardDraft.time_dimension_member,
+            granularity: cardDraft.time_dimension_granularity,
+            ...(cardDraft.time_dimension_start && cardDraft.time_dimension_end
+              ? { dateRange: [cardDraft.time_dimension_start, cardDraft.time_dimension_end] }
+              : {}),
+          }]
+        : [];
+    const order =
+      cardDraft.order_member
+        ? { [cardDraft.order_member]: cardDraft.order_direction || 'desc' }
+        : {};
+
+    return { filters, time_dimensions, order };
+  }, [cardDraft]);
+
   const runPreview = async () => {
     if (!cardDraft?.measures?.length) {
       setCardError('Pick at least one measure first.');
@@ -380,9 +453,9 @@ export const DashboardBuilderModal = ({
       const previewQuery = {
         measures: cardDraft.measures,
         dimensions: cardDraft.dimensions || [],
-        filters: jsonSafeParse(cardDraft.filters_json, []),
-        time_dimensions: jsonSafeParse(cardDraft.time_dimensions_json, []),
-        order: jsonSafeParse(cardDraft.order_json, {}),
+        filters: queryPartsFromDraft.filters,
+        time_dimensions: queryPartsFromDraft.time_dimensions,
+        order: queryPartsFromDraft.order,
         limit: 50,
         offset: 0,
       };
@@ -406,9 +479,9 @@ export const DashboardBuilderModal = ({
     const queryPayload = {
       measures: cardDraft.measures,
       dimensions: cardDraft.dimensions || [],
-      filters: jsonSafeParse(cardDraft.filters_json, []),
-      time_dimensions: jsonSafeParse(cardDraft.time_dimensions_json, []),
-      order: jsonSafeParse(cardDraft.order_json, {}),
+      filters: queryPartsFromDraft.filters,
+      time_dimensions: queryPartsFromDraft.time_dimensions,
+      order: queryPartsFromDraft.order,
       limit: Number(cardDraft.limit || 1000),
       offset: Number(cardDraft.offset || 0),
     };
@@ -569,9 +642,9 @@ export const DashboardBuilderModal = ({
         const previewQuery = {
           measures: cardDraft.measures,
           dimensions: cardDraft.dimensions || [],
-          filters: jsonSafeParse(cardDraft.filters_json, []),
-          time_dimensions: jsonSafeParse(cardDraft.time_dimensions_json, []),
-          order: jsonSafeParse(cardDraft.order_json, {}),
+          filters: queryPartsFromDraft.filters,
+          time_dimensions: queryPartsFromDraft.time_dimensions,
+          order: queryPartsFromDraft.order,
           limit: 50,
           offset: 0,
         };
@@ -588,49 +661,93 @@ export const DashboardBuilderModal = ({
     token,
     cardDraft?.measures,
     cardDraft?.dimensions,
-    cardDraft?.filters_json,
-    cardDraft?.time_dimensions_json,
-    cardDraft?.order_json,
+    queryPartsFromDraft.filters,
+    queryPartsFromDraft.time_dimensions,
+    queryPartsFromDraft.order,
   ]);
+
+  // Keep advanced JSON fields in sync with the visual builder unless user is actively overriding via advanced mode.
+  useEffect(() => {
+    if (!cardDraft || cardDraft.advanced_mode) return;
+    const nextFilters = JSON.stringify(queryPartsFromDraft.filters, null, 2);
+    const nextTime = JSON.stringify(queryPartsFromDraft.time_dimensions, null, 2);
+    const nextOrder = JSON.stringify(queryPartsFromDraft.order, null, 2);
+    if (
+      cardDraft.filters_json === nextFilters &&
+      cardDraft.time_dimensions_json === nextTime &&
+      cardDraft.order_json === nextOrder
+    ) return;
+    setCardDraft((p: any) => ({
+      ...p,
+      filters_json: nextFilters,
+      time_dimensions_json: nextTime,
+      order_json: nextOrder,
+    }));
+  }, [cardDraft, queryPartsFromDraft]);
 
   return (
     <>
       <Modal
         open={open}
         onClose={onClose}
-        title="Dashboard Builder"
-        subtitle="Create, edit, and manage dashboards/cards"
+        title="Settings"
+        subtitle="Manage cube schemas and dashboard configuration"
         nearlyFullscreen
       >
-        <div style={{ display: 'grid', gridTemplateColumns: sidebarCollapsed ? '44px 1fr' : '300px 1fr', gap: 16, minHeight: 560 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: sidebarCollapsed ? '44px 1fr' : '320px 1fr', gap: 16, minHeight: 560 }}>
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', background: C.surface }}>
             {sidebarCollapsed ? (
               <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 8, gap: 10 }}>
                 <button
                   onClick={() => setSidebarCollapsed(false)}
-                  title="Expand dashboard list"
+                  title="Expand settings panel"
                   style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, width: 28, height: 28, cursor: 'pointer', fontSize: 14, color: C.textSecondary }}
                 >
                   »
                 </button>
                 <div style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 11, color: C.textMuted, letterSpacing: '0.08em' }}>
-                  DASHBOARDS
+                  SETTINGS
                 </div>
               </div>
             ) : (
               <>
                 <div style={{ padding: 12, borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13 }}>Dashboards</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <button onClick={startCreateDashboard} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}>+ New</button>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 13, color: C.textPrimary }}>Settings Hub</div>
+                    <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Schemas first, dashboards second</div>
+                  </div>
+                  <button
+                    onClick={() => setSidebarCollapsed(true)}
+                    title="Collapse settings panel"
+                    style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, width: 28, height: 28, cursor: 'pointer', fontSize: 14, color: C.textSecondary }}
+                  >
+                    «
+                  </button>
+                </div>
+
+                {/* Top Section: Schema Editor */}
+                <div style={{ padding: 10, borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, background: C.surfaceAlt, padding: 10 }}>
+                    <div style={{ fontSize: 11, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, marginBottom: 6 }}>
+                      Schema Editor
+                    </div>
+                    <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.4, marginBottom: 10 }}>
+                      Manage Cube YAML/JS models with versioned saves and validation.
+                    </div>
                     <button
-                      onClick={() => setSidebarCollapsed(true)}
-                      title="Collapse dashboard list"
-                      style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, width: 28, height: 28, cursor: 'pointer', fontSize: 14, color: C.textSecondary }}
+                      onClick={() => setSchemaEditorOpen(true)}
+                      style={{ width: '100%', border: `1px solid ${C.black}`, background: C.black, color: '#fff', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                      title="Open Cube Schema Editor"
                     >
-                      «
+                      Open Schema Editor
                     </button>
                   </div>
+                </div>
+
+                {/* Bottom Section: Dashboards */}
+                <div style={{ padding: 10, borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 12, color: C.textPrimary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Dashboards</div>
+                  <button onClick={startCreateDashboard} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}>+ New</button>
                 </div>
                 <div style={{ padding: '8px 10px', borderBottom: `1px solid ${C.border}` }}>
                   <input
@@ -640,9 +757,9 @@ export const DashboardBuilderModal = ({
                     style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 9px', fontSize: 12, outline: 'none' }}
                   />
                 </div>
-                <div style={{ maxHeight: 510, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ maxHeight: 430, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {loadingList ? (
-                    <div style={{ color: C.textMuted, fontSize: 12, padding: 8 }}>Loading...</div>
+                    <div style={{ color: C.textMuted, fontSize: 12, padding: 8 }}>Loading dashboards...</div>
                   ) : listError ? (
                     <div style={{ color: C.red, fontSize: 12, padding: 8 }}>{listError}</div>
                   ) : filteredDashboards.map(d => (
@@ -864,6 +981,12 @@ export const DashboardBuilderModal = ({
         </div>
       </Modal>
 
+      <CubeSchemaEditorModal
+        open={schemaEditorOpen}
+        token={token}
+        onClose={() => setSchemaEditorOpen(false)}
+      />
+
       <Modal
         open={cardBuilderOpen}
         onClose={() => setCardBuilderOpen(false)}
@@ -907,7 +1030,22 @@ export const DashboardBuilderModal = ({
               </div>
               <select
                 value={cardDraft.cube_name}
-                onChange={e => setCardDraft((p: any) => ({ ...p, cube_name: e.target.value, measures: [], dimensions: [], filters_json: '[]', time_dimensions_json: '[]', order_json: '{}' }))}
+                onChange={e => setCardDraft((p: any) => ({
+                  ...p,
+                  cube_name: e.target.value,
+                  measures: [],
+                  dimensions: [],
+                  filter_rows: [{ member: '', operator: 'equals', value: '' }],
+                  time_dimension_member: '',
+                  time_dimension_granularity: 'month',
+                  time_dimension_start: '',
+                  time_dimension_end: '',
+                  order_member: '',
+                  order_direction: 'desc',
+                  filters_json: '[]',
+                  time_dimensions_json: '[]',
+                  order_json: '{}',
+                }))}
                 style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}
               >
                 <option value="">Select cube or view</option>
@@ -1002,27 +1140,146 @@ export const DashboardBuilderModal = ({
                 <input type="number" placeholder="Row" title="Grid row: vertical placement in the dashboard." value={cardDraft.grid_row} onChange={e => setCardDraft((p: any) => ({ ...p, grid_row: Number(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
-                <div>
-                  <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Filters (JSON array)</div>
-                  <textarea rows={4} value={cardDraft.filters_json} onChange={e => setCardDraft((p: any) => ({ ...p, filters_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Time dimensions (JSON array)</div>
-                  <textarea rows={4} value={cardDraft.time_dimensions_json} onChange={e => setCardDraft((p: any) => ({ ...p, time_dimensions_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+              <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.textPrimary }}>Filters (non-technical)</div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {(cardDraft.filter_rows || []).map((row: any, idx: number) => {
+                    const selectedMemberType = selectedCubeDimensions.find(d => d.name === row.member)?.type || 'string';
+                    const requiresNoValue = row.operator === 'set' || row.operator === 'notSet';
+                    return (
+                      <div key={`filter-row-${idx}`} style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.9fr 1fr auto', gap: 8 }}>
+                        <select
+                          value={row.member}
+                          onChange={e => setCardDraft((p: any) => ({
+                            ...p,
+                            filter_rows: p.filter_rows.map((r: any, i: number) => i === idx ? { ...r, member: e.target.value } : r),
+                          }))}
+                          style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                        >
+                          <option value="">Filter field</option>
+                          {selectedCubeDimensions.map(d => (
+                            <option key={d.name} value={d.name}>{d.shortTitle || d.title || d.name}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={row.operator}
+                          onChange={e => setCardDraft((p: any) => ({
+                            ...p,
+                            filter_rows: p.filter_rows.map((r: any, i: number) => i === idx ? { ...r, operator: e.target.value } : r),
+                          }))}
+                          style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                        >
+                          {FILTER_OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
+                        </select>
+                        <input
+                          value={row.value}
+                          disabled={requiresNoValue}
+                          placeholder={requiresNoValue ? 'No value needed' : selectedMemberType === 'time' ? 'YYYY-MM-DD' : 'Value'}
+                          onChange={e => setCardDraft((p: any) => ({
+                            ...p,
+                            filter_rows: p.filter_rows.map((r: any, i: number) => i === idx ? { ...r, value: e.target.value } : r),
+                          }))}
+                          style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12, opacity: requiresNoValue ? 0.6 : 1 }}
+                        />
+                        <button
+                          onClick={() => setCardDraft((p: any) => ({
+                            ...p,
+                            filter_rows: (p.filter_rows || []).filter((_: any, i: number) => i !== idx),
+                          }))}
+                          style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontSize: 12 }}
+                          title="Remove filter"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <div>
+                    <button
+                      onClick={() => setCardDraft((p: any) => ({
+                        ...p,
+                        filter_rows: [...(p.filter_rows || []), { member: '', operator: 'equals', value: '' }],
+                      }))}
+                      style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', fontSize: 12 }}
+                    >
+                      + Add Filter
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              {timeDimensions.length > 0 && (
-                <div style={{ fontSize: 11, color: C.textMuted }}>
-                  Available time dimensions: {timeDimensions.map(t => t.name).join(', ')}
-                </div>
-              )}
-
-              <div>
-                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Order (JSON object)</div>
-                <textarea rows={2} value={cardDraft.order_json} onChange={e => setCardDraft((p: any) => ({ ...p, order_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.8fr 0.8fr', gap: 8 }}>
+                <select
+                  value={cardDraft.time_dimension_member || ''}
+                  onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_member: e.target.value }))}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                >
+                  <option value="">No time grouping</option>
+                  {timeDimensions.map(t => (
+                    <option key={t.name} value={t.name}>{t.shortTitle || t.title || t.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={cardDraft.time_dimension_granularity || 'month'}
+                  onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_granularity: e.target.value }))}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                >
+                  {TIME_GRANULARITIES.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+                <input
+                  type="date"
+                  value={cardDraft.time_dimension_start || ''}
+                  onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_start: e.target.value }))}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                />
+                <input
+                  type="date"
+                  value={cardDraft.time_dimension_end || ''}
+                  onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_end: e.target.value }))}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                />
               </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 8 }}>
+                <select
+                  value={cardDraft.order_member || ''}
+                  onChange={e => setCardDraft((p: any) => ({ ...p, order_member: e.target.value }))}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                >
+                  <option value="">No sorting</option>
+                  {(cardDraft.measures || []).map((m: string) => (
+                    <option key={m} value={m}>{m.split('.').pop() || m}</option>
+                  ))}
+                </select>
+                <select
+                  value={cardDraft.order_direction || 'desc'}
+                  onChange={e => setCardDraft((p: any) => ({ ...p, order_direction: e.target.value }))}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                >
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
+                </select>
+              </div>
+
+              <details style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 12, color: C.textMuted }}>Advanced JSON (optional)</summary>
+                <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Filters (JSON array)</div>
+                      <textarea rows={4} value={cardDraft.filters_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, filters_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Time dimensions (JSON array)</div>
+                      <textarea rows={4} value={cardDraft.time_dimensions_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, time_dimensions_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Order (JSON object)</div>
+                    <textarea rows={2} value={cardDraft.order_json} onChange={e => setCardDraft((p: any) => ({ ...p, advanced_mode: true, order_json: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'monospace', fontSize: 11 }} />
+                  </div>
+                </div>
+              </details>
 
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><input type="checkbox" checked={cardDraft.show_legend} onChange={e => setCardDraft((p: any) => ({ ...p, show_legend: e.target.checked }))} /> Show legend</label>

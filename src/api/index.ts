@@ -118,3 +118,32 @@ export const reorderDashboardCards = async (
 ) => {
   return request<any>(`/admin/dashboards/${dashboardSlug}/cards/reorder`, token, 'PUT', { cards });
 };
+
+// Cube schema YAML model manager
+export const listCubeSchemas = async (token: string, includeInactive = false) => {
+  const suffix = includeInactive ? '?include_inactive=true' : '';
+  return request<any[]>(`/admin/cube-schemas${suffix}`, token);
+};
+
+export const getCubeSchema = async (id: number, token: string) => {
+  return request<any>(`/admin/cube-schemas/${id}`, token);
+};
+
+export const createCubeSchema = async (
+  payload: { file_name: string; schema_type: 'cube' | 'view'; content: string; created_by?: string | null },
+  token: string,
+) => {
+  return request<any>('/admin/cube-schemas', token, 'POST', payload);
+};
+
+export const updateCubeSchema = async (
+  id: number,
+  payload: { content: string; updated_by?: string | null },
+  token: string,
+) => {
+  return request<any>(`/admin/cube-schemas/${id}`, token, 'PUT', payload);
+};
+
+export const deleteCubeSchema = async (id: number, token: string) => {
+  return request<void>(`/admin/cube-schemas/${id}`, token, 'DELETE');
+};
