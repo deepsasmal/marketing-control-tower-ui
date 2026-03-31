@@ -37,6 +37,7 @@ import {
   Legend,
   Cell,
 } from 'recharts';
+import { PenSquare, Plus, Save, Trash2, Wand2 } from 'lucide-react';
 
 type BuilderProps = {
   open: boolean;
@@ -95,7 +96,6 @@ const BUSINESS_TOOLTIPS: Record<string, string> = {
   addFilter: 'Add another filter condition to narrow the card query.',
   removeFilter: 'Remove this filter condition.',
   timeField: 'Optional date/time field for trend grouping and date slicing.',
-  timeDimensionField: 'Cube field used by the dashboard-level date filter for this card (e.g. OrderLines.order_date).',
   timeGranularity: 'Time bucket size for grouping (day, week, month, quarter, year).',
   startDate: 'Start date for the reporting window (inclusive).',
   endDate: 'End date for the reporting window (inclusive).',
@@ -107,6 +107,7 @@ const BUSINESS_TOOLTIPS: Record<string, string> = {
   orderJson: 'Advanced: raw order object in JSON format.',
   showLegend: 'Show or hide chart legend labels.',
   showDataLabels: 'Show or hide numeric labels directly on chart marks.',
+  showTrend: 'Show KPI trend versus the previous comparable period when the backend provides it.',
   autoPreview: 'Automatically refresh preview after edits with a short delay.',
   livePreview: 'Run preview now using current card configuration.',
   saveCard: 'Save this card to the selected dashboard.',
@@ -206,6 +207,22 @@ function formatNumber(value: number, prefix = '', suffix = ''): string {
   if (Math.abs(value) >= 1_000) return `${prefix}${(value / 1_000).toFixed(1)}K${suffix}`;
   return `${prefix}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
 }
+
+function getTimeGranularityDefault(chartType?: string, granularity?: string): string {
+  if (chartType === 'kpi') return '';
+  if (granularity) return granularity;
+  return 'month';
+}
+
+const iconButtonBaseStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 9,
+  cursor: 'pointer',
+};
 
 export const DashboardBuilderModal = ({
   open,
@@ -436,8 +453,7 @@ export const DashboardBuilderModal = ({
       dimensions: initialQuery.dimensions || [],
       filter_rows: parsedFilters.length > 0 ? parsedFilters : [{ member: '', operator: 'equals', value: '' }],
       time_dimension_member: firstTimeDimension.dimension || '',
-      time_dimension_field: card?.metadata?.time_dimension || firstTimeDimension.dimension || '',
-      time_dimension_granularity: firstTimeDimension.granularity || 'month',
+      time_dimension_granularity: getTimeGranularityDefault(card?.chart_type || 'bar', firstTimeDimension.granularity),
       time_dimension_start: Array.isArray(firstTimeDimension.dateRange) ? (firstTimeDimension.dateRange[0] || '') : '',
       time_dimension_end: Array.isArray(firstTimeDimension.dateRange) ? (firstTimeDimension.dateRange[1] || '') : '',
       limit: Number(initialQuery.limit ?? 1000),
@@ -449,6 +465,7 @@ export const DashboardBuilderModal = ({
       time_dimensions_json: JSON.stringify(initialQuery.time_dimensions || [], null, 2),
       order_json: JSON.stringify(initialQuery.order || {}, null, 2),
       metadata: card?.metadata || {},
+      show_trend: !!card?.metadata?.show_trend,
     });
     setCardError('');
     setQueryValidationError('');
@@ -486,10 +503,12 @@ export const DashboardBuilderModal = ({
 
     const filters = toQueryFilters(cardDraft.filter_rows || []);
     const time_dimensions =
-      cardDraft.time_dimension_member && cardDraft.time_dimension_granularity
+      cardDraft.time_dimension_member
         ? [{
             dimension: cardDraft.time_dimension_member,
-            granularity: cardDraft.time_dimension_granularity,
+            ...(cardDraft.chart_type !== 'kpi' && cardDraft.time_dimension_granularity
+              ? { granularity: cardDraft.time_dimension_granularity }
+              : {}),
             ...(cardDraft.time_dimension_start && cardDraft.time_dimension_end
               ? { dateRange: [cardDraft.time_dimension_start, cardDraft.time_dimension_end] }
               : {}),
@@ -561,10 +580,17 @@ export const DashboardBuilderModal = ({
       }
 
       const metadataPayload = { ...(cardEditing?.metadata || {}), ...(cardDraft.metadata || {}) };
-      if (cardDraft.time_dimension_field?.trim()) {
-        metadataPayload.time_dimension = cardDraft.time_dimension_field.trim();
+      // Persist the configured time dimension so drilldowns can always find it,
+      // even when the /data response doesn't echo back cube_query.time_dimensions.
+      if (cardDraft.time_dimension_member) {
+        metadataPayload.time_dimension = cardDraft.time_dimension_member;
       } else {
         delete metadataPayload.time_dimension;
+      }
+      if (cardDraft.chart_type === 'kpi') {
+        metadataPayload.show_trend = !!cardDraft.show_trend;
+      } else {
+        delete metadataPayload.show_trend;
       }
 
       const payload = {
@@ -972,12 +998,34 @@ export const DashboardBuilderModal = ({
               </label>
 
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <button title={tip('saveDashboard')} onClick={saveDashboardMeta} disabled={savingDashboard} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', opacity: savingDashboard ? 0.65 : 1 }}>
-                  {savingDashboard ? 'Saving...' : isCreateMode ? 'Create dashboard' : 'Save metadata'}
+                <button
+                  aria-label={savingDashboard ? 'Saving dashboard metadata' : isCreateMode ? 'Create dashboard' : 'Save dashboard metadata'}
+                  title={savingDashboard ? 'Saving dashboard metadata...' : isCreateMode ? 'Create dashboard' : 'Save metadata'}
+                  onClick={saveDashboardMeta}
+                  disabled={savingDashboard}
+                  style={{
+                    ...iconButtonBaseStyle,
+                    border: 'none',
+                    background: C.black,
+                    color: '#fff',
+                    opacity: savingDashboard ? 0.65 : 1,
+                  }}
+                >
+                  <Save size={16} strokeWidth={1.9} />
                 </button>
                 {!isCreateMode && (
-                  <button title={tip('deleteDashboard')} onClick={handleDeleteDashboard} style={{ border: `1px solid ${C.red}`, background: C.redLight, color: C.red, borderRadius: 8, padding: '8px 12px', cursor: 'pointer' }}>
-                    Delete dashboard
+                  <button
+                    aria-label="Delete dashboard"
+                    title={tip('deleteDashboard')}
+                    onClick={handleDeleteDashboard}
+                    style={{
+                      ...iconButtonBaseStyle,
+                      border: `1px solid ${C.red}`,
+                      background: C.redLight,
+                      color: C.red,
+                    }}
+                  >
+                    <Trash2 size={16} strokeWidth={1.9} />
                   </button>
                 )}
                 {dashboardMessage && <span style={{ fontSize: 12, color: dashboardMessage.toLowerCase().includes('failed') ? C.red : C.textMuted }}>{dashboardMessage}</span>}
@@ -995,16 +1043,46 @@ export const DashboardBuilderModal = ({
                         title={tip('cardSearch')}
                         style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: '6px 10px', fontSize: 12, minWidth: 180, outline: 'none' }}
                       />
-                      <button title={tip('addCard')} onClick={() => openCardBuilder()} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>+ Add Card</button>
                       <button
+                        aria-label="Add card"
+                        title={tip('addCard')}
+                        onClick={() => openCardBuilder()}
+                        style={{
+                          ...iconButtonBaseStyle,
+                          border: `1px solid ${C.border}`,
+                          background: C.surfaceAlt,
+                          color: C.textPrimary,
+                        }}
+                      >
+                        <Plus size={16} strokeWidth={2} />
+                      </button>
+                      <button
+                        aria-label="Smart reset layout"
                         onClick={resetLayoutIntelligently}
                         title="Auto-fix layout values and reflow cards into a clean grid."
-                        style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}
+                        style={{
+                          ...iconButtonBaseStyle,
+                          border: `1px solid ${C.border}`,
+                          background: C.surfaceAlt,
+                          color: C.textPrimary,
+                        }}
                       >
-                        Smart Reset Layout
+                        <Wand2 size={16} strokeWidth={1.9} />
                       </button>
-                      <button title={tip('saveLayout')} onClick={saveLayout} disabled={reorderSaving} style={{ border: 'none', background: C.black, color: '#fff', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', opacity: reorderSaving ? 0.65 : 1 }}>
-                        {reorderSaving ? 'Saving...' : 'Save Layout'}
+                      <button
+                        aria-label={reorderSaving ? 'Saving layout' : 'Save layout'}
+                        title={reorderSaving ? 'Saving layout...' : tip('saveLayout')}
+                        onClick={saveLayout}
+                        disabled={reorderSaving}
+                        style={{
+                          ...iconButtonBaseStyle,
+                          border: 'none',
+                          background: C.black,
+                          color: '#fff',
+                          opacity: reorderSaving ? 0.65 : 1,
+                        }}
+                      >
+                        <Save size={16} strokeWidth={1.9} />
                       </button>
                     </div>
                   </div>
@@ -1050,7 +1128,7 @@ export const DashboardBuilderModal = ({
                                   borderBottom: `1px solid ${C.border}`,
                                   padding: 10,
                                   display: 'grid',
-                                  gridTemplateColumns: 'minmax(220px, 1fr) 56px 72px 72px 56px 120px',
+                                  gridTemplateColumns: 'minmax(220px, 1fr) 56px 72px 72px 56px 88px',
                                   gap: 8,
                                   alignItems: 'center',
                                 }}
@@ -1093,8 +1171,44 @@ export const DashboardBuilderModal = ({
                                   style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 6px' }}
                                 />
                                 <div style={{ display: 'flex', gap: 6 }}>
-                                  <button title={tip('editCard')} onClick={() => openCardBuilder(card)} style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 11 }}>Edit</button>
-                                  <button title={tip('deleteCard')} onClick={() => removeCard(card)} style={{ border: `1px solid ${C.red}`, background: C.redLight, color: C.red, borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 11 }}>Delete</button>
+                                  <button
+                                    aria-label="Edit card"
+                                    title={tip('editCard')}
+                                    onClick={() => openCardBuilder(card)}
+                                    style={{
+                                      width: 32,
+                                      height: 32,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      border: `1px solid ${C.border}`,
+                                      background: C.surfaceAlt,
+                                      color: C.textSecondary,
+                                      borderRadius: 8,
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    <PenSquare size={15} strokeWidth={1.9} />
+                                  </button>
+                                  <button
+                                    aria-label="Delete card"
+                                    title={tip('deleteCard')}
+                                    onClick={() => removeCard(card)}
+                                    style={{
+                                      width: 32,
+                                      height: 32,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      border: `1px solid ${C.red}`,
+                                      background: C.redLight,
+                                      color: C.red,
+                                      borderRadius: 8,
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    <Trash2 size={15} strokeWidth={1.9} />
+                                  </button>
                                 </div>
                               </div>
                             );
@@ -1166,8 +1280,7 @@ export const DashboardBuilderModal = ({
                   dimensions: [],
                   filter_rows: [{ member: '', operator: 'equals', value: '' }],
                   time_dimension_member: '',
-                  time_dimension_field: '',
-                  time_dimension_granularity: 'month',
+                  time_dimension_granularity: getTimeGranularityDefault(p.chart_type),
                   time_dimension_start: '',
                   time_dimension_end: '',
                   order_member: '',
@@ -1175,7 +1288,7 @@ export const DashboardBuilderModal = ({
                   filters_json: '[]',
                   time_dimensions_json: '[]',
                   order_json: '{}',
-                  metadata: { ...(p.metadata || {}), time_dimension: '' },
+                  metadata: { ...(p.metadata || {}) },
                 }))}
                 style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}
                 title={tip('cubeSelect')}
@@ -1246,7 +1359,16 @@ export const DashboardBuilderModal = ({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
                 <input title={tip('cardTitle')} placeholder="Card title" value={cardDraft.title} onChange={e => setCardDraft((p: any) => ({ ...p, title: e.target.value, slug: p.slug || slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
                 <input title={tip('cardSlug')} placeholder="Card slug" value={cardDraft.slug} onChange={e => setCardDraft((p: any) => ({ ...p, slug: slugify(e.target.value) }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
-                <select title={tip('chartType')} value={cardDraft.chart_type} onChange={e => setCardDraft((p: any) => ({ ...p, chart_type: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
+                <select
+                  title={tip('chartType')}
+                  value={cardDraft.chart_type}
+                  onChange={e => setCardDraft((p: any) => ({
+                    ...p,
+                    chart_type: e.target.value,
+                    time_dimension_granularity: getTimeGranularityDefault(e.target.value, e.target.value === 'kpi' ? '' : p.time_dimension_granularity),
+                  }))}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}
+                >
                   {CHART_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
                 <select title={tip('colorScheme')} value={cardDraft.color_scheme} onChange={e => setCardDraft((p: any) => ({ ...p, color_scheme: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}>
@@ -1359,7 +1481,9 @@ export const DashboardBuilderModal = ({
                   onChange={e => setCardDraft((p: any) => ({
                     ...p,
                     time_dimension_member: e.target.value,
-                    time_dimension_field: e.target.value || p.time_dimension_field || '',
+                    time_dimension_granularity: e.target.value
+                      ? getTimeGranularityDefault(p.chart_type, p.time_dimension_granularity)
+                      : '',
                   }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
                   title={tip('timeField')}
@@ -1370,11 +1494,14 @@ export const DashboardBuilderModal = ({
                   ))}
                 </select>
                 <select
-                  value={cardDraft.time_dimension_granularity || 'month'}
+                  value={cardDraft.time_dimension_granularity || ''}
                   onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_granularity: e.target.value }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
                   title={tip('timeGranularity')}
                 >
+                  {cardDraft.chart_type === 'kpi' && (
+                    <option value="">No grouping (recommended for KPI totals)</option>
+                  )}
                   {TIME_GRANULARITIES.map(g => <option key={g} value={g}>{g}</option>)}
                 </select>
                 <input
@@ -1392,14 +1519,6 @@ export const DashboardBuilderModal = ({
                   title={tip('endDate')}
                 />
               </div>
-
-              <input
-                value={cardDraft.time_dimension_field || ''}
-                onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_field: e.target.value }))}
-                placeholder="Time Dimension Field (for dashboard filter) e.g. OrderLines.order_date"
-                style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
-                title={tip('timeDimensionField')}
-              />
 
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 8 }}>
                 <select
@@ -1447,6 +1566,12 @@ export const DashboardBuilderModal = ({
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <label title={tip('showLegend')} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><input type="checkbox" checked={cardDraft.show_legend} onChange={e => setCardDraft((p: any) => ({ ...p, show_legend: e.target.checked }))} /> Show legend</label>
                 <label title={tip('showDataLabels')} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><input type="checkbox" checked={cardDraft.show_data_labels} onChange={e => setCardDraft((p: any) => ({ ...p, show_data_labels: e.target.checked }))} /> Show data labels</label>
+                {cardDraft.chart_type === 'kpi' && (
+                  <label title={tip('showTrend')} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <input type="checkbox" checked={!!cardDraft.show_trend} onChange={e => setCardDraft((p: any) => ({ ...p, show_trend: e.target.checked }))} />
+                    Show trend indicator
+                  </label>
+                )}
               </div>
             </div>
 
@@ -1496,6 +1621,12 @@ export const DashboardBuilderModal = ({
                           cardDraft.value_suffix || '',
                         )}
                       </div>
+                      {cardDraft.show_trend && (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 4, fontFamily: "'Inter', sans-serif", fontSize: 12, fontWeight: 600, color: C.green }}>
+                          <span>↑ 12.1%</span>
+                          <span style={{ color: C.textMuted, fontWeight: 500 }}>vs previous period</span>
+                        </div>
+                      )}
                     </div>
                   ) : ['bar', 'line', 'area'].includes(cardDraft.chart_type) ? (
                     <div style={{ width: '100%', height: 230 }}>

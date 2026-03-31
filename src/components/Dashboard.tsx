@@ -129,11 +129,7 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
     dateFilter.mode === 'preset' ? dateFilter.preset : DATE_RANGE_PRESETS[0],
   );
   const [hasUserChangedDateFilter, setHasUserChangedDateFilter] = useState(false);
-  const showDatePicker = useMemo(() => {
-    if (!dashboardData) return false;
-    const hasTimeDimensionCard = (dashboardData.cards || []).some((card: any) => !!card?.metadata?.time_dimension);
-    return Boolean(dashboardData.default_date_range) || hasTimeDimensionCard;
-  }, [dashboardData]);
+  const showDatePicker = useMemo(() => Boolean(dashboardData), [dashboardData]);
 
   // Map of cube name → full CubeDetail (measures + dimensions), fetched per unique cube
   const [cubeMetaMap, setCubeMetaMap] = useState<Record<string, CubeDetail>>({});
@@ -259,18 +255,15 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
     if (dateFilter.mode === 'all') {
       setDateControlMode('preset');
       setSelectedPreset(dashboardData.default_date_range);
+      setDateFilter({ mode: 'preset', preset: dashboardData.default_date_range });
     }
   }, [dashboardData, hasUserChangedDateFilter, dateFilter.mode]);
 
   useEffect(() => {
-    if (!dashboardData) return;
-    const hasTimeDimensionCard = (dashboardData.cards || []).some((card: any) => !!card?.metadata?.time_dimension);
-    if (!dashboardData.default_date_range && !hasTimeDimensionCard && dateFilter.mode !== 'all') {
-      setDateControlMode('all');
-      setDateFilter({ mode: 'all' });
+    if (dateFilter.mode === 'all') {
       setHasUserChangedDateFilter(false);
     }
-  }, [dashboardData, dateFilter.mode]);
+  }, [activeSlug]);
 
   useEffect(() => {
     setDrillStates({});
@@ -338,6 +331,106 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
     return [...dims].sort((a, b) => Number(isIdentifierLike(a)) - Number(isIdentifierLike(b)));
   };
 
+  const resolveTimeDimensionForDrill = (
+    card: CardWithData,
+    baseQuery: (CardWithData['cube_query'] & { timeDimensions?: any[]; time_dimensions?: any[] }) | undefined,
+    validDimensions?: Array<{ name: string; type: string }>,
+  ) => {
+    // 1. Prefer explicit time_dimensions saved on the cube_query
+    const queryTimeDimensions = baseQuery?.time_dimensions || baseQuery?.timeDimensions || [];
+    const directDimension = queryTimeDimensions[0]?.dimension;
+    if (directDimension) return directDimension;
+
+    // 2. Fetch fresh from dashboardData in case the card object is stale
+    const latestCard =
+      dashboardData?.cards?.find(d => String(d.id) === String(card.id)) ||
+      dashboardData?.cards?.find(d => d.slug === card.slug);
+    const latestCardQuery: any = latestCard?.cube_query;
+    const latestTimeDimensions = latestCardQuery?.time_dimensions || latestCardQuery?.timeDimensions || [];
+    const latestDimension = latestTimeDimensions[0]?.dimension;
+    if (latestDimension) return latestDimension;
+
+    // 3. Legacy metadata field
+    if (card.metadata?.time_dimension) return String(card.metadata.time_dimension);
+
+    // 4. Infer from data row keys (works when card still has time grouping)
+    const rowKeys = Object.keys(card.data?.[0] || {});
+    const inferredKey = rowKeys.find(key => {
+      const lower = key.toLowerCase();
+      return (
+        lower.includes('.date') ||
+        lower.endsWith('_date') ||
+        lower.includes('created_at') ||
+        lower.includes('updated_at') ||
+        lower.includes('.month') ||
+        lower.includes('.quarter') ||
+        lower.includes('.year') ||
+        lower.includes('.week') ||
+        lower.includes('.day')
+      );
+    });
+
+    if (inferredKey) {
+      return inferredKey
+        .replace(/\.month$/i, '')
+        .replace(/\.quarter$/i, '')
+        .replace(/\.year$/i, '')
+        .replace(/\.week$/i, '')
+        .replace(/\.day$/i, '');
+    }
+
+    // 5. Final fallback: find a time-type dimension from the drilldown API valid_dimensions.
+    //    Prefer generic "created_at" or dimensions whose name contains the cube's primary entity
+    //    over stage-specific ones (mql_date, sql_date) to avoid choosing the wrong lifecycle date.
+    if (validDimensions?.length) {
+      const timeDims = validDimensions.filter(d => d.type === 'time');
+      if (timeDims.length) {
+        // Priority: exact match on card measure stem > "created_at" > first in list
+        const measureStem = (card.cube_query?.measures?.[0] ?? '').replace(/\.[^.]+$/, '').toLowerCase();
+        const byMeasureStem = timeDims.find(d => d.name.toLowerCase().startsWith(measureStem + '.created'));
+        if (byMeasureStem) return byMeasureStem.name;
+        const createdAt = timeDims.find(d => d.name.toLowerCase().endsWith('.created_at'));
+        if (createdAt) return createdAt.name;
+        return timeDims[0].name;
+      }
+    }
+
+    return '';
+  };
+
+  const buildDrillTimeDimensions = (
+    card: CardWithData,
+    baseQuery: CardWithData['cube_query'] & { timeDimensions?: any[] },
+    validDimensions?: Array<{ name: string; type: string }>,
+  ) => {
+    const sourceTimeDimension = resolveTimeDimensionForDrill(card, baseQuery, validDimensions);
+
+    if (!sourceTimeDimension) {
+      return [];
+    }
+
+    if (dateFilter.mode === 'custom' && dateFilter.fromDate && dateFilter.toDate) {
+      return [{
+        dimension: sourceTimeDimension,
+        dateRange: [dateFilter.fromDate, dateFilter.toDate],
+      }];
+    }
+
+    const activePresetRange =
+      (dateFilter.mode === 'preset' && dateFilter.preset)
+        ? dateFilter.preset
+        : dashboardData?.applied_date_range;
+
+    if (activePresetRange) {
+      return [{
+        dimension: sourceTimeDimension,
+        dateRange: activePresetRange,
+      }];
+    }
+
+    return [];
+  };
+
   const runDrillQueryForCard = async (card: CardWithData, payload: DrillPayload, forcedTargetDimension?: string) => {
     const cardKey = getCardKey(card);
     const baseQuery = card.cube_query || inferQueryFields(card.data);
@@ -388,7 +481,8 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
     try {
       const drilldownsData = await fetchDrilldowns(cubeName, token);
       const measureEntry = drilldownsData.drilldowns?.find((d: any) => d.measure === measures[0]);
-      const validDimsRaw: string[] = (measureEntry?.valid_dimensions ?? []).map((d: any) => d.name);
+      const validDimsWithTypes: Array<{ name: string; type: string }> = measureEntry?.valid_dimensions ?? [];
+      const validDimsRaw: string[] = validDimsWithTypes.map((d: any) => d.name);
       const validDims = rankDrillDimensions(validDimsRaw);
       const targetDimension =
         forcedTargetDimension ||
@@ -408,7 +502,7 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
         measures,
         dimensions: targetDimension ? [targetDimension] : [],
         filters: clickedFilter ? [...baseFilters, clickedFilter] : baseFilters,
-        time_dimensions: baseQuery.time_dimensions || [],
+        time_dimensions: buildDrillTimeDimensions(card, baseQuery, validDimsWithTypes),
         order: { [measures[0]]: 'desc' },
         limit: 50,
         offset: 0,
@@ -600,23 +694,6 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
 
         {/* Right actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
-            onClick={handleRefreshData}
-            disabled={refreshing || loading}
-            className="topbar-btn"
-            style={{
-              color: C.textPrimary,
-              background: C.surfaceAlt,
-              borderColor: C.border,
-              opacity: refreshing || loading ? 0.65 : 1,
-              cursor: refreshing || loading ? 'not-allowed' : 'pointer',
-            }}
-            title="Refresh dashboard data"
-          >
-            <RefreshCw size={14} strokeWidth={2} />
-            {refreshing ? 'Refreshing...' : 'Refresh'}
-          </button>
-
           {showDatePicker && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 10, padding: '4px 6px' }}>
@@ -683,6 +760,23 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
               )}
             </div>
           )}
+
+          <button
+            onClick={handleRefreshData}
+            disabled={refreshing || loading}
+            className="topbar-btn"
+            style={{
+              color: C.textPrimary,
+              background: C.surfaceAlt,
+              borderColor: C.border,
+              opacity: refreshing || loading ? 0.65 : 1,
+              cursor: refreshing || loading ? 'not-allowed' : 'pointer',
+            }}
+            title="Refresh dashboard data"
+          >
+            <RefreshCw size={14} strokeWidth={2} />
+            {refreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
 
           <button
             onClick={() => setShowBuilder(true)}
@@ -802,6 +896,7 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
             {!loading && showDatePicker && dashboardData?.applied_date_range && (
               <div style={{ marginTop: 8 }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textSecondary, borderRadius: 999, fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 600, padding: '4px 8px 4px 10px' }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.blue, display: 'inline-block' }} />
                   {toTitleCaseLabel(dashboardData.applied_date_range)}
                   <button
                     onClick={applyAllTimeFilter}

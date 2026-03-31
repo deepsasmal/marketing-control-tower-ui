@@ -34,10 +34,18 @@ function getKpiColor(colorScheme?: string): string {
   return map[colorScheme || ''] || C.textPrimary;
 }
 
+function getTrendPresentation(direction: CardWithData['trend_direction']) {
+  if (direction === 'up') return { icon: '↑', color: C.green };
+  if (direction === 'down') return { icon: '↓', color: C.red };
+  return { icon: '—', color: C.textMuted };
+}
+
 export const KPITile = ({ card, onDrillDown }: { card: CardWithData, onDrillDown?: (card: CardWithData, row: any) => void }) => {
   const { measures } = card.cube_query || inferQueryFields(card.data);
   const rawValue = card.data[0]?.[measures[0]] || "0";
   const displayValue = formatKPI(rawValue, card.value_prefix, card.value_suffix);
+  const showTrend = !!card.metadata?.show_trend && card.trend_pct !== null;
+  const trend = getTrendPresentation(card.trend_direction);
 
   // Base KPI color follows selected color scheme in the builder.
   // Alert thresholds still override this to signal warning/error states.
@@ -64,6 +72,12 @@ export const KPITile = ({ card, onDrillDown }: { card: CardWithData, onDrillDown
       <div style={{ fontSize: 32, fontWeight: 800, fontFamily: "'Outfit', sans-serif", color, lineHeight: 1.1, letterSpacing: "-0.02em" }}>
         {displayValue}
       </div>
+      {showTrend && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 8, fontFamily: "'Inter', sans-serif", fontSize: 12, fontWeight: 600, color: trend.color }}>
+          <span>{trend.icon} {Math.abs(card.trend_pct || 0).toFixed(1)}%</span>
+          {card.trend_label ? <span style={{ color: C.textMuted, fontWeight: 500 }}>{card.trend_label}</span> : null}
+        </div>
+      )}
       {card.subtitle && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, fontFamily: "'Inter', sans-serif", fontWeight: 500 }}>{card.subtitle}</div>}
     </Card>
   );

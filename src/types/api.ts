@@ -71,6 +71,9 @@ export interface CardWithData {
     limit?: number;
     time_dimensions?: any[];
   };
+  trend_pct: number | null;
+  trend_direction: 'up' | 'down' | 'flat' | null;
+  trend_label: string | null;
   data: any[];
   row_count: number;
   error: string | null;
