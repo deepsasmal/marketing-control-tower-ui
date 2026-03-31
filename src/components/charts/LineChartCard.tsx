@@ -6,6 +6,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { C } from '../../lib/constants';
 import { CustomTooltip } from '../ui/CustomTooltip';
 import { useChartData } from '../../hooks/useChartData';
+import { formatValueWithAffixes } from '../../lib/numberFormat';
 
 export const LineChartCard = ({ card, onDrillDown, globalFilters = [], token = '', dimensionOptions = [] }: any) => {
   const { activeDimension, setActiveDimension, data, loading, currentMeasures } = useChartData(card, globalFilters, token);
@@ -27,6 +28,7 @@ export const LineChartCard = ({ card, onDrillDown, globalFilters = [], token = '
     name: m.split('.')[1]?.replace(/_/g, ' ') || m,
     color: [C.black, C.blue, C.green, C.purple, C.amber][i % 5]
   }));
+  const showLegend = !!card.show_legend && lines.length > 1;
 
   const rightAction = dimensionOptions.length > 0 ? (
     <select value={activeDimension} onChange={e => setActiveDimension(e.target.value)} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, color: C.textPrimary, outline: 'none', cursor: 'pointer' }}>
@@ -36,16 +38,37 @@ export const LineChartCard = ({ card, onDrillDown, globalFilters = [], token = '
 
   return (
     <Card style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <CardHeader title={card.title} subtitle={card.subtitle} right={rightAction} />
+      <CardHeader title={card.title} subtitle={card.subtitle} description={card.description} right={rightAction} />
       <div style={{ flex: 1, padding: '16px 18px', minHeight: 200, position: 'relative' }}>
         {loading && <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.5)', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div className="animate-pulse" style={{ fontSize: 13, color: C.textMuted }}>Updating...</div></div>}
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData} margin={{ top: 10, right: 10, bottom: 20, left: 10 }}>
+          <LineChart data={chartData} margin={{ top: 10, right: 10, bottom: showLegend ? 58 : 30, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} axisLine={false} tickLine={false} tickFormatter={v => `${card.value_prefix || ''}${v}${card.value_suffix || ''}`} />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }}
+              axisLine={false}
+              tickLine={false}
+              label={card.x_axis_label ? { value: card.x_axis_label, position: 'insideBottom', offset: -14, fill: C.textSecondary, fontSize: 11 } : undefined}
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: C.textMuted, fontFamily: "'Inter', sans-serif", fontWeight: 500 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={v => formatValueWithAffixes(v, card.value_prefix || '', card.value_suffix || '')}
+              label={card.y_axis_label ? { value: card.y_axis_label, angle: -90, position: 'insideLeft', offset: -2, fill: C.textSecondary, fontSize: 11 } : undefined}
+              width={56}
+            />
             <Tooltip content={<CustomTooltip prefix={card.value_prefix || ''} suffix={card.value_suffix || ''} />} />
-            {card.show_legend && <Legend iconType="circle" iconSize={7} wrapperStyle={{ fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 500 }} />}
+            {showLegend && (
+              <Legend
+                iconType="circle"
+                iconSize={7}
+                verticalAlign="bottom"
+                height={28}
+                wrapperStyle={{ fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 500 }}
+              />
+            )}
             {lines.map((l: any) => (
               <Line
                 key={l.dataKey} type="monotone" dataKey={l.dataKey} name={l.name} stroke={l.color} strokeWidth={2}

@@ -30,7 +30,7 @@ export const PieChartCard = ({ card, onDrillDown, globalFilters = [], token = ''
 
     return (
         <Card style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <CardHeader title={card.title} subtitle={card.subtitle} right={rightAction} />
+            <CardHeader title={card.title} subtitle={card.subtitle} description={card.description} right={rightAction} />
             <div style={{ flex: 1, padding: '16px 18px', minHeight: 250, position: 'relative' }}>
                 {loading && <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.5)', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div className="animate-pulse" style={{ fontSize: 13, color: C.textMuted }}>Updating...</div></div>}
                 <ResponsiveContainer width="100%" height="100%">

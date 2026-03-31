@@ -81,6 +81,7 @@ const BUSINESS_TOOLTIPS: Record<string, string> = {
   chartType: 'Visual style for this card (KPI, bar, line, table, etc.).',
   colorScheme: 'Primary color theme used for card values and chart series.',
   subtitle: 'Optional supporting context shown below the card title.',
+  cardDescription: 'Business definition shown in the info tooltip on the card.',
   valuePrefix: 'Text shown before values (for example: $, EUR, ~).',
   valueSuffix: 'Text shown after values (for example: %, units, days).',
   xAxisLabel: 'Business-friendly label for the horizontal chart axis.',
@@ -94,6 +95,7 @@ const BUSINESS_TOOLTIPS: Record<string, string> = {
   addFilter: 'Add another filter condition to narrow the card query.',
   removeFilter: 'Remove this filter condition.',
   timeField: 'Optional date/time field for trend grouping and date slicing.',
+  timeDimensionField: 'Cube field used by the dashboard-level date filter for this card (e.g. OrderLines.order_date).',
   timeGranularity: 'Time bucket size for grouping (day, week, month, quarter, year).',
   startDate: 'Start date for the reporting window (inclusive).',
   endDate: 'End date for the reporting window (inclusive).',
@@ -434,6 +436,7 @@ export const DashboardBuilderModal = ({
       dimensions: initialQuery.dimensions || [],
       filter_rows: parsedFilters.length > 0 ? parsedFilters : [{ member: '', operator: 'equals', value: '' }],
       time_dimension_member: firstTimeDimension.dimension || '',
+      time_dimension_field: card?.metadata?.time_dimension || firstTimeDimension.dimension || '',
       time_dimension_granularity: firstTimeDimension.granularity || 'month',
       time_dimension_start: Array.isArray(firstTimeDimension.dateRange) ? (firstTimeDimension.dateRange[0] || '') : '',
       time_dimension_end: Array.isArray(firstTimeDimension.dateRange) ? (firstTimeDimension.dateRange[1] || '') : '',
@@ -445,6 +448,7 @@ export const DashboardBuilderModal = ({
       filters_json: JSON.stringify(initialQuery.filters || [], null, 2),
       time_dimensions_json: JSON.stringify(initialQuery.time_dimensions || [], null, 2),
       order_json: JSON.stringify(initialQuery.order || {}, null, 2),
+      metadata: card?.metadata || {},
     });
     setCardError('');
     setQueryValidationError('');
@@ -556,6 +560,13 @@ export const DashboardBuilderModal = ({
         return;
       }
 
+      const metadataPayload = { ...(cardEditing?.metadata || {}), ...(cardDraft.metadata || {}) };
+      if (cardDraft.time_dimension_field?.trim()) {
+        metadataPayload.time_dimension = cardDraft.time_dimension_field.trim();
+      } else {
+        delete metadataPayload.time_dimension;
+      }
+
       const payload = {
         slug: cardDraft.slug.trim(),
         title: cardDraft.title.trim(),
@@ -573,6 +584,7 @@ export const DashboardBuilderModal = ({
         y_axis_label: cardDraft.y_axis_label || null,
         show_legend: !!cardDraft.show_legend,
         show_data_labels: !!cardDraft.show_data_labels,
+        metadata: metadataPayload,
         ...(cardDraft.color_scheme && cardDraft.color_scheme !== 'default'
           ? { color_scheme: cardDraft.color_scheme }
           : {}),
@@ -1154,6 +1166,7 @@ export const DashboardBuilderModal = ({
                   dimensions: [],
                   filter_rows: [{ member: '', operator: 'equals', value: '' }],
                   time_dimension_member: '',
+                  time_dimension_field: '',
                   time_dimension_granularity: 'month',
                   time_dimension_start: '',
                   time_dimension_end: '',
@@ -1162,6 +1175,7 @@ export const DashboardBuilderModal = ({
                   filters_json: '[]',
                   time_dimensions_json: '[]',
                   order_json: '{}',
+                  metadata: { ...(p.metadata || {}), time_dimension: '' },
                 }))}
                 style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }}
                 title={tip('cubeSelect')}
@@ -1243,6 +1257,15 @@ export const DashboardBuilderModal = ({
                   ))}
                 </select>
               </div>
+
+              <textarea
+                title={tip('cardDescription')}
+                placeholder="Card description (shown in info tooltip)"
+                rows={2}
+                value={cardDraft.description}
+                onChange={e => setCardDraft((p: any) => ({ ...p, description: e.target.value }))}
+                style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontFamily: "'Inter', sans-serif", fontSize: 12, resize: 'vertical' }}
+              />
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
                 <input title={tip('subtitle')} placeholder="Subtitle" value={cardDraft.subtitle} onChange={e => setCardDraft((p: any) => ({ ...p, subtitle: e.target.value }))} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px' }} />
@@ -1333,7 +1356,11 @@ export const DashboardBuilderModal = ({
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.8fr 0.8fr', gap: 8 }}>
                 <select
                   value={cardDraft.time_dimension_member || ''}
-                  onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_member: e.target.value }))}
+                  onChange={e => setCardDraft((p: any) => ({
+                    ...p,
+                    time_dimension_member: e.target.value,
+                    time_dimension_field: e.target.value || p.time_dimension_field || '',
+                  }))}
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
                   title={tip('timeField')}
                 >
@@ -1365,6 +1392,14 @@ export const DashboardBuilderModal = ({
                   title={tip('endDate')}
                 />
               </div>
+
+              <input
+                value={cardDraft.time_dimension_field || ''}
+                onChange={e => setCardDraft((p: any) => ({ ...p, time_dimension_field: e.target.value }))}
+                placeholder="Time Dimension Field (for dashboard filter) e.g. OrderLines.order_date"
+                style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+                title={tip('timeDimensionField')}
+              />
 
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 8 }}>
                 <select

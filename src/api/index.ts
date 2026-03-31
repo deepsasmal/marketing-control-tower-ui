@@ -59,8 +59,20 @@ export const fetchDashboards = async (token: string): Promise<DashboardListItem[
   return request<DashboardListItem[]>('/dashboards', token);
 };
 
-export const fetchDashboardData = async (slug: string, token: string): Promise<DashboardDataResponse> => {
-  return request<DashboardDataResponse>(`/dashboards/${slug}/data`, token);
+export const fetchDashboardData = async (
+  slug: string,
+  token: string,
+  params?: { date_range?: string; from_date?: string; to_date?: string },
+): Promise<DashboardDataResponse> => {
+  const search = new URLSearchParams();
+  if (params?.date_range) {
+    search.set('date_range', params.date_range);
+  } else if (params?.from_date && params?.to_date) {
+    search.set('from_date', params.from_date);
+    search.set('to_date', params.to_date);
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : '';
+  return request<DashboardDataResponse>(`/dashboards/${slug}/data${suffix}`, token);
 };
 
 export const fetchDashboardDefinition = async (slug: string, token: string) => {

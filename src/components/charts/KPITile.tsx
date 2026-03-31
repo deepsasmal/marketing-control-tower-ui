@@ -2,7 +2,7 @@ import React from 'react';
 import { CardWithData } from '../../types/api';
 import { C } from '../../lib/constants';
 import { Card } from '../ui/Card';
-import { MetricLabel } from '../ui/Tooltip';
+import { InfoTooltipButton } from '../ui/Tooltip';
 import { inferQueryFields } from '../../lib/utils';
 
 function formatKPI(raw: string, prefix?: string | null, suffix?: string | null): string {
@@ -55,8 +55,11 @@ export const KPITile = ({ card, onDrillDown }: { card: CardWithData, onDrillDown
         sourceChartType: 'kpi',
       })}
     >
-      <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, letterSpacing: "0.08em", color: C.textMuted, textTransform: "uppercase", marginBottom: 10 }}>
-        {card.description ? <MetricLabel label={card.title} tooltip={card.description} /> : card.title}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+        <div style={{ fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.04em", color: C.textMuted, textTransform: "uppercase" }}>
+          {card.title}
+        </div>
+        {card.description ? <InfoTooltipButton tooltip={card.description} /> : null}
       </div>
       <div style={{ fontSize: 32, fontWeight: 800, fontFamily: "'Outfit', sans-serif", color, lineHeight: 1.1, letterSpacing: "-0.02em" }}>
         {displayValue}

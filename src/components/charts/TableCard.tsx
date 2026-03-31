@@ -11,7 +11,7 @@ export const TableCard = ({ card }: { card: CardWithData }) => {
 
   return (
     <Card style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <CardHeader title={card.title} subtitle={card.subtitle} />
+      <CardHeader title={card.title} subtitle={card.subtitle} description={card.description} />
       <div style={{ flex: 1, padding: '16px 18px', overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, fontFamily: "'Inter', sans-serif" }}>
           <thead>

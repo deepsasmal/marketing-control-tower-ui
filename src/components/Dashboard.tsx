@@ -12,7 +12,7 @@ import { DrilldownView } from './charts/DrilldownView';
 import { AgentPanel } from './AgentPanel';
 import {
   Sparkles, LogOut, TrendingUp, Filter, Megaphone, Package,
-  Building2, Activity, LayoutDashboard, PieChart, DollarSign, Users, BarChart3, PenSquare, RefreshCw,
+  Building2, Activity, LayoutDashboard, PieChart, DollarSign, Users, BarChart3, PenSquare, RefreshCw, CalendarRange,
 } from 'lucide-react';
 import { inferQueryFields } from '../lib/utils';
 import { Skeleton } from './ui/Skeleton';
@@ -47,6 +47,46 @@ function getTabIcon(d: DashboardListItem): React.ElementType {
   return LayoutDashboard;
 }
 
+const DATE_RANGE_PRESETS = [
+  'this year',
+  'last year',
+  'last quarter',
+  'this quarter',
+  'last 30 days',
+  'last 7 days',
+  'last 12 months',
+] as const;
+
+type DateFilterState =
+  | { mode: 'all' }
+  | { mode: 'preset'; preset: string }
+  | { mode: 'custom'; fromDate: string; toDate: string };
+
+function getInitialSlugFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const m = window.location.pathname.match(/\/dashboard\/([^/]+)/);
+  return m?.[1] ? decodeURIComponent(m[1]) : null;
+}
+
+function getInitialDateFilterFromUrl(): DateFilterState {
+  if (typeof window === 'undefined') return { mode: 'all' };
+  const params = new URLSearchParams(window.location.search);
+  const dateRange = params.get('date_range');
+  const fromDate = params.get('from_date');
+  const toDate = params.get('to_date');
+
+  if (dateRange) return { mode: 'preset', preset: dateRange };
+  if (fromDate && toDate) return { mode: 'custom', fromDate, toDate };
+  return { mode: 'all' };
+}
+
+function toTitleCaseLabel(value: string) {
+  return value
+    .split(' ')
+    .map(part => (part ? `${part[0].toUpperCase()}${part.slice(1)}` : part))
+    .join(' ');
+}
+
 export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => void }) => {
   type DrillPayload = {
     row: any;
@@ -70,7 +110,7 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
   };
 
   const [dashboards, setDashboards] = useState<DashboardListItem[]>([]);
-  const [activeSlug, setActiveSlug] = useState<string | null>(null);
+  const [activeSlug, setActiveSlug] = useState<string | null>(getInitialSlugFromUrl);
   const [dashboardData, setDashboardData] = useState<DashboardDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -79,6 +119,21 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
   const [refreshing, setRefreshing] = useState(false);
 
   const globalFilters: any[] = [];
+  const [dateFilter, setDateFilter] = useState<DateFilterState>(getInitialDateFilterFromUrl);
+  const [dateControlMode, setDateControlMode] = useState<'all' | 'preset' | 'custom'>(
+    dateFilter.mode === 'custom' ? 'custom' : (dateFilter.mode === 'preset' ? 'preset' : 'all'),
+  );
+  const [customFromDate, setCustomFromDate] = useState(dateFilter.mode === 'custom' ? dateFilter.fromDate : '');
+  const [customToDate, setCustomToDate] = useState(dateFilter.mode === 'custom' ? dateFilter.toDate : '');
+  const [selectedPreset, setSelectedPreset] = useState(
+    dateFilter.mode === 'preset' ? dateFilter.preset : DATE_RANGE_PRESETS[0],
+  );
+  const [hasUserChangedDateFilter, setHasUserChangedDateFilter] = useState(false);
+  const showDatePicker = useMemo(() => {
+    if (!dashboardData) return false;
+    const hasTimeDimensionCard = (dashboardData.cards || []).some((card: any) => !!card?.metadata?.time_dimension);
+    return Boolean(dashboardData.default_date_range) || hasTimeDimensionCard;
+  }, [dashboardData]);
 
   // Map of cube name → full CubeDetail (measures + dimensions), fetched per unique cube
   const [cubeMetaMap, setCubeMetaMap] = useState<Record<string, CubeDetail>>({});
@@ -87,6 +142,36 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
   const [kpiDrillModalCardKey, setKpiDrillModalCardKey] = useState<string | null>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
+
+  const dashboardDateParams = useMemo(() => {
+    if (dateFilter.mode === 'preset' && dateFilter.preset) {
+      return { date_range: dateFilter.preset };
+    }
+    if (dateFilter.mode === 'custom' && dateFilter.fromDate && dateFilter.toDate) {
+      return { from_date: dateFilter.fromDate, to_date: dateFilter.toDate };
+    }
+    return undefined;
+  }, [dateFilter]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete('date_range');
+    params.delete('from_date');
+    params.delete('to_date');
+
+    if (dateFilter.mode === 'preset' && dateFilter.preset) {
+      params.set('date_range', dateFilter.preset);
+    } else if (dateFilter.mode === 'custom' && dateFilter.fromDate && dateFilter.toDate) {
+      params.set('from_date', dateFilter.fromDate);
+      params.set('to_date', dateFilter.toDate);
+    }
+
+    const nextPath = activeSlug ? `/dashboard/${activeSlug}` : window.location.pathname;
+    const nextQuery = params.toString();
+    const nextUrl = `${nextPath}${nextQuery ? `?${nextQuery}` : ''}`;
+    window.history.replaceState({}, '', nextUrl);
+  }, [activeSlug, dateFilter]);
 
   const refreshDashboardList = async (preferredSlug: string | null = activeSlug) => {
     const data = await fetchDashboards(token);
@@ -113,18 +198,18 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
   useEffect(() => {
     if (!activeSlug) return;
     setLoading(true);
-    fetchDashboardData(activeSlug, token)
+    fetchDashboardData(activeSlug, token, dashboardDateParams)
       .then(setDashboardData)
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, [activeSlug, token]);
+  }, [activeSlug, token, dashboardDateParams]);
 
   const handleRefreshData = async () => {
     if (!activeSlug) return;
     setRefreshing(true);
     setError('');
     try {
-      const data = await fetchDashboardData(activeSlug, token);
+      const data = await fetchDashboardData(activeSlug, token, dashboardDateParams);
       setDashboardData(data);
     } catch (err: any) {
       setError(err.message || 'Failed to refresh dashboard data');
@@ -132,6 +217,65 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
       setRefreshing(false);
     }
   };
+
+  const applyAllTimeFilter = () => {
+    setHasUserChangedDateFilter(true);
+    setDateControlMode('all');
+    setDateFilter({ mode: 'all' });
+  };
+
+  const applyPresetFilter = (preset: string) => {
+    setHasUserChangedDateFilter(true);
+    setDateControlMode('preset');
+    setSelectedPreset(preset);
+    setDateFilter({ mode: 'preset', preset });
+  };
+
+  const switchToCustomFilter = () => {
+    setHasUserChangedDateFilter(true);
+    setDateControlMode('custom');
+    if (dateFilter.mode === 'custom') {
+      setCustomFromDate(dateFilter.fromDate);
+      setCustomToDate(dateFilter.toDate);
+    } else {
+      setCustomFromDate('');
+      setCustomToDate('');
+    }
+  };
+
+  const applyCustomDateFilter = () => {
+    if (!customFromDate || !customToDate) return;
+    if (customFromDate > customToDate) return;
+    setHasUserChangedDateFilter(true);
+    setDateFilter({ mode: 'custom', fromDate: customFromDate, toDate: customToDate });
+  };
+
+  useEffect(() => {
+    if (!dashboardData || hasUserChangedDateFilter) return;
+    if (!dashboardData.default_date_range) {
+      setDateControlMode('all');
+      return;
+    }
+    if (dateFilter.mode === 'all') {
+      setDateControlMode('preset');
+      setSelectedPreset(dashboardData.default_date_range);
+    }
+  }, [dashboardData, hasUserChangedDateFilter, dateFilter.mode]);
+
+  useEffect(() => {
+    if (!dashboardData) return;
+    const hasTimeDimensionCard = (dashboardData.cards || []).some((card: any) => !!card?.metadata?.time_dimension);
+    if (!dashboardData.default_date_range && !hasTimeDimensionCard && dateFilter.mode !== 'all') {
+      setDateControlMode('all');
+      setDateFilter({ mode: 'all' });
+      setHasUserChangedDateFilter(false);
+    }
+  }, [dashboardData, dateFilter.mode]);
+
+  useEffect(() => {
+    setDrillStates({});
+    setKpiDrillModalCardKey(null);
+  }, [activeSlug, dateFilter]);
 
   // When dashboard data loads, fetch cube metadata for every unique cube used by cards.
   // This replaces the old single-`primary_cube` approach and supports multi-cube dashboards.
@@ -473,6 +617,73 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
             {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
 
+          {showDatePicker && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 10, padding: '4px 6px' }}>
+                <CalendarRange size={14} color={C.textMuted} />
+                <select
+                  value={dateControlMode === 'all' ? 'all' : (dateControlMode === 'custom' ? 'custom' : selectedPreset)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === 'all') applyAllTimeFilter();
+                    else if (value === 'custom') switchToCustomFilter();
+                    else applyPresetFilter(value);
+                  }}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: C.textPrimary,
+                    fontSize: 12,
+                    fontFamily: "'Inter', sans-serif",
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                  title="Dashboard date range"
+                >
+                  <option value="all">All Time</option>
+                  {DATE_RANGE_PRESETS.map(p => (
+                    <option key={p} value={p}>{toTitleCaseLabel(p)}</option>
+                  ))}
+                  <option value="custom">Custom Range...</option>
+                </select>
+              </div>
+              {dateControlMode === 'custom' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="date"
+                    value={customFromDate}
+                    onChange={(e) => setCustomFromDate(e.target.value)}
+                    style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 8px', fontSize: 12, fontFamily: "'Inter', sans-serif", color: C.textPrimary, outline: 'none' }}
+                    title="Custom start date"
+                  />
+                  <input
+                    type="date"
+                    value={customToDate}
+                    onChange={(e) => setCustomToDate(e.target.value)}
+                    style={{ border: `1px solid ${C.border}`, background: C.surfaceAlt, borderRadius: 8, padding: '6px 8px', fontSize: 12, fontFamily: "'Inter', sans-serif", color: C.textPrimary, outline: 'none' }}
+                    title="Custom end date"
+                  />
+                  <button
+                    onClick={applyCustomDateFilter}
+                    disabled={!customFromDate || !customToDate || customFromDate > customToDate}
+                    className="topbar-btn"
+                    style={{
+                      color: C.textPrimary,
+                      background: C.surfaceAlt,
+                      borderColor: C.border,
+                      padding: '6px 10px',
+                      opacity: (!customFromDate || !customToDate || customFromDate > customToDate) ? 0.6 : 1,
+                      cursor: (!customFromDate || !customToDate || customFromDate > customToDate) ? 'not-allowed' : 'pointer',
+                    }}
+                    title="Apply custom range"
+                  >
+                    Apply
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             onClick={() => setShowBuilder(true)}
             className="topbar-btn"
@@ -588,6 +799,20 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
                 </span>
               )}
             </div>
+            {!loading && showDatePicker && dashboardData?.applied_date_range && (
+              <div style={{ marginTop: 8 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textSecondary, borderRadius: 999, fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 600, padding: '4px 8px 4px 10px' }}>
+                  {toTitleCaseLabel(dashboardData.applied_date_range)}
+                  <button
+                    onClick={applyAllTimeFilter}
+                    title="Clear date filter"
+                    style={{ border: 'none', background: 'transparent', color: C.textMuted, cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}
+                  >
+                    ×
+                  </button>
+                </span>
+              </div>
+            )}
 
           </div>
 
@@ -601,19 +826,39 @@ export const Dashboard = ({ token, onLogout }: { token: string; onLogout: () => 
             ) : loading && (!dashboardData || activeSlug !== dashboardData.slug) ? (
               <DashboardSkeleton />
             ) : dashboardData ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gridAutoRows: 'minmax(120px, auto)', gap: 24 }}>
-                {dashboardData.cards.map(card => (
-                  <div
-                    key={card.id}
-                    style={{
-                      gridColumn: `${card.grid_col_start} / span ${card.grid_col_span}`,
-                      gridRow: card.grid_row ? card.grid_row : 'auto',
-                      minHeight: card.chart_type === 'kpi' ? 120 : 360,
-                    }}
-                  >
-                    {renderCard(card)}
+              <div style={{ position: 'relative' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gridAutoRows: 'minmax(120px, auto)', gap: 24 }}>
+                  {dashboardData.cards.map(card => (
+                    <div
+                      key={card.id}
+                      style={{
+                        gridColumn: `${card.grid_col_start} / span ${card.grid_col_span}`,
+                        gridRow: card.grid_row ? card.grid_row : 'auto',
+                        minHeight: card.chart_type === 'kpi' ? 120 : 360,
+                      }}
+                    >
+                      {renderCard(card)}
+                    </div>
+                  ))}
+                </div>
+                {loading && activeSlug === dashboardData.slug && (
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'rgba(255,255,255,0.55)',
+                    backdropFilter: 'blur(1px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: 12,
+                    zIndex: 5,
+                    pointerEvents: 'none',
+                  }}>
+                    <div style={{ padding: '10px 14px', border: `1px solid ${C.border}`, background: C.surface, borderRadius: 10, fontSize: 12, color: C.textSecondary, fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
+                      Updating cards...
+                    </div>
                   </div>
-                ))}
+                )}
               </div>
             ) : null}
           </div>

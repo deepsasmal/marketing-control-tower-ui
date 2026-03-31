@@ -8,6 +8,7 @@ import {
 import { C } from '../../lib/constants';
 import { CustomTooltip } from '../ui/CustomTooltip';
 import { useChartData } from '../../hooks/useChartData';
+import { formatValueWithAffixes } from '../../lib/numberFormat';
 
 const PALETTE = [C.blue, C.green, C.purple, C.amber, C.black];
 
@@ -68,6 +69,7 @@ export const AreaChartCard = ({ card, onDrillDown, globalFilters = [], token = '
     color: PALETTE[i % PALETTE.length],
     gradientId: `areaGrad-${card.id}-${i}`,
   }));
+  const showLegend = !!card.show_legend && series.length > 1;
 
   const rightAction = dimensionOptions.length > 0 ? (
     <select
@@ -87,7 +89,7 @@ export const AreaChartCard = ({ card, onDrillDown, globalFilters = [], token = '
 
   return (
     <Card style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <CardHeader title={card.title} subtitle={card.subtitle} right={rightAction} />
+      <CardHeader title={card.title} subtitle={card.subtitle} description={card.description} right={rightAction} />
       <div style={{ flex: 1, padding: '16px 18px', minHeight: 200, position: 'relative' }}>
         {loading && (
           <div style={{
@@ -98,7 +100,7 @@ export const AreaChartCard = ({ card, onDrillDown, globalFilters = [], token = '
           </div>
         )}
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData} margin={{ top: 10, right: 16, bottom: 8, left: 10 }}>
+          <AreaChart data={chartData} margin={{ top: 10, right: 16, bottom: showLegend ? 58 : 26, left: 10 }}>
             <defs>
               {series.map(s => (
                 <linearGradient key={s.gradientId} id={s.gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -124,6 +126,7 @@ export const AreaChartCard = ({ card, onDrillDown, globalFilters = [], token = '
               axisLine={false}
               tickLine={false}
               dy={6}
+              label={card.x_axis_label ? { value: card.x_axis_label, position: 'insideBottom', offset: -12, fill: C.textSecondary, fontSize: 11 } : undefined}
             />
 
             <YAxis
@@ -134,19 +137,22 @@ export const AreaChartCard = ({ card, onDrillDown, globalFilters = [], token = '
               }}
               axisLine={false}
               tickLine={false}
-              tickFormatter={v => `${card.value_prefix || ''}${v}${card.value_suffix || ''}`}
+              tickFormatter={v => formatValueWithAffixes(v, card.value_prefix || '', card.value_suffix || '')}
               width={48}
+              label={card.y_axis_label ? { value: card.y_axis_label, angle: -90, position: 'insideLeft', offset: -2, fill: C.textSecondary, fontSize: 11 } : undefined}
             />
 
             <Tooltip
               content={<CustomTooltip prefix={card.value_prefix || ''} suffix={card.value_suffix || ''} />}
             />
 
-            {card.show_legend && (
+            {showLegend && (
               <Legend
                 iconType="circle"
                 iconSize={7}
-                wrapperStyle={{ fontSize: 11, fontFamily: "'Inter', sans-serif", paddingTop: 8 }}
+                verticalAlign="bottom"
+                height={28}
+                wrapperStyle={{ fontSize: 11, fontFamily: "'Inter', sans-serif", paddingTop: 2 }}
               />
             )}
 

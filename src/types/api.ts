@@ -86,6 +86,8 @@ export interface DashboardDataResponse {
   refresh_interval_seconds: number;
   tags: string[];
   metadata: Record<string, any>;
+  default_date_range: string | null;
+  applied_date_range: string | null;
   total_cards: number;
   failed_cards: number;
   cards: CardWithData[];

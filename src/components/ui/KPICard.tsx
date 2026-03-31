@@ -9,24 +9,11 @@ export const KPICard = ({ label, value, delta, deltaInverse = false, sub, sparkD
   <Card onClick={onClick} style={{ 
     padding: "18px 20px", 
     cursor: "pointer", 
-    transition: "all 0.2s ease",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.02)",
-    border: `1px solid ${C.border}`,
-    background: "linear-gradient(180deg, #ffffff 0%, #fcfcfd 100%)"
-  }}
-  onMouseEnter={(e: any) => {
-    e.currentTarget.style.transform = "translateY(-2px)";
-    e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.06)";
-    e.currentTarget.style.borderColor = "rgba(0,0,0,0.1)";
-  }}
-  onMouseLeave={(e: any) => {
-    e.currentTarget.style.transform = "translateY(0)";
-    e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.02)";
-    e.currentTarget.style.borderColor = C.border;
+    background: "linear-gradient(180deg, #ffffff 0%, #fcfcfe 100%)"
   }}
   >
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-      <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, letterSpacing: "0.08em", color: C.textMuted, textTransform: "uppercase", marginBottom: 10 }}>
+      <div style={{ fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.05em", color: C.textMuted, textTransform: "uppercase", marginBottom: 10 }}>
         {tooltip ? <MetricLabel label={label} tooltip={tooltip} /> : label}
       </div>
       {delta !== undefined && <StatDelta val={delta} inverse={deltaInverse} />}
