@@ -466,6 +466,16 @@ export const DashboardBuilderModal = ({
       order_json: JSON.stringify(initialQuery.order || {}, null, 2),
       metadata: card?.metadata || {},
       show_trend: !!card?.metadata?.show_trend,
+      track_as_kpi: !!card?.metadata?.track_as_kpi,
+      kpi_slug: card?.metadata?.kpi_slug ?? card?.slug ?? '',
+      owner: card?.metadata?.owner ?? 'marketing',
+      unit: card?.metadata?.unit ?? 'currency',
+      target_type: card?.metadata?.target_type ?? 'min',
+      target: card?.metadata?.target ?? '',
+      green_threshold: card?.metadata?.green_threshold ?? (card?.metadata?.target_type === 'max' ? 100 : 90),
+      amber_threshold: card?.metadata?.amber_threshold ?? (card?.metadata?.target_type === 'max' ? 115 : 75),
+      alert_threshold: card?.metadata?.alert_threshold ?? 10,
+      calculation_notes: card?.metadata?.calculation_notes ?? '',
     });
     setCardError('');
     setQueryValidationError('');
@@ -493,33 +503,51 @@ export const DashboardBuilderModal = ({
   const queryPartsFromDraft = useMemo(() => {
     if (!cardDraft) return { filters: [], time_dimensions: [], order: {} };
 
+    const normalizeTimeDimensions = (rawTimeDimensions: any[]) => {
+      const parsed = Array.isArray(rawTimeDimensions) ? rawTimeDimensions.filter(td => td && typeof td === 'object') : [];
+      if (parsed.length > 0) {
+        return parsed.map((td: any) => {
+          const next = { ...td };
+          if (
+            cardDraft.time_dimension_member &&
+            next.dimension === cardDraft.time_dimension_member &&
+            !next.granularity &&
+            cardDraft.time_dimension_granularity
+          ) {
+            next.granularity = cardDraft.time_dimension_granularity;
+          }
+          return next;
+        });
+      }
+
+      if (!cardDraft.time_dimension_member) return [];
+
+      return [{
+        dimension: cardDraft.time_dimension_member,
+        ...(cardDraft.time_dimension_granularity
+          ? { granularity: cardDraft.time_dimension_granularity }
+          : {}),
+        ...(cardDraft.time_dimension_start && cardDraft.time_dimension_end
+          ? { dateRange: [cardDraft.time_dimension_start, cardDraft.time_dimension_end] }
+          : {}),
+      }];
+    };
+
     if (cardDraft.advanced_mode) {
       return {
         filters: jsonSafeParse(cardDraft.filters_json || '[]', []),
-        time_dimensions: jsonSafeParse(cardDraft.time_dimensions_json || '[]', []),
+        time_dimensions: normalizeTimeDimensions(jsonSafeParse(cardDraft.time_dimensions_json || '[]', [])),
         order: jsonSafeParse(cardDraft.order_json || '{}', {}),
       };
     }
 
     const filters = toQueryFilters(cardDraft.filter_rows || []);
-    const time_dimensions =
-      cardDraft.time_dimension_member
-        ? [{
-            dimension: cardDraft.time_dimension_member,
-            ...(cardDraft.chart_type !== 'kpi' && cardDraft.time_dimension_granularity
-              ? { granularity: cardDraft.time_dimension_granularity }
-              : {}),
-            ...(cardDraft.time_dimension_start && cardDraft.time_dimension_end
-              ? { dateRange: [cardDraft.time_dimension_start, cardDraft.time_dimension_end] }
-              : {}),
-          }]
-        : [];
     const order =
       cardDraft.order_member
         ? { [cardDraft.order_member]: cardDraft.order_direction || 'desc' }
         : {};
 
-    return { filters, time_dimensions, order };
+    return { filters, time_dimensions: normalizeTimeDimensions([]), order };
   }, [cardDraft]);
 
   const runPreview = async () => {
@@ -591,6 +619,23 @@ export const DashboardBuilderModal = ({
         metadataPayload.show_trend = !!cardDraft.show_trend;
       } else {
         delete metadataPayload.show_trend;
+      }
+
+      if (cardDraft.track_as_kpi) {
+        metadataPayload.track_as_kpi       = true;
+        metadataPayload.kpi_slug           = cardDraft.slug || cardDraft.kpi_slug || '';
+        metadataPayload.owner              = cardDraft.owner || 'marketing';
+        metadataPayload.unit               = cardDraft.unit || 'currency';
+        metadataPayload.target_type        = cardDraft.target_type || 'min';
+        metadataPayload.target             = Number(cardDraft.target) || 0;
+        metadataPayload.green_threshold    = Number(cardDraft.green_threshold) ?? 90;
+        metadataPayload.amber_threshold    = Number(cardDraft.amber_threshold) ?? 75;
+        metadataPayload.alert_threshold    = Number(cardDraft.alert_threshold) ?? 10;
+        metadataPayload.calculation_notes  = cardDraft.calculation_notes || '';
+      } else {
+        ['track_as_kpi', 'kpi_slug', 'owner', 'unit', 'target_type', 'target',
+          'green_threshold', 'amber_threshold', 'alert_threshold', 'calculation_notes',
+        ].forEach(k => delete metadataPayload[k]);
       }
 
       const payload = {
@@ -1475,6 +1520,15 @@ export const DashboardBuilderModal = ({
                 </div>
               </div>
 
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: 2 }}>
+                  Time settings
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted }}>
+                  Choose the date field, grouping, and optional date range for time-based queries.
+                </div>
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.8fr 0.8fr', gap: 8 }}>
                 <select
                   value={cardDraft.time_dimension_member || ''}
@@ -1573,6 +1627,329 @@ export const DashboardBuilderModal = ({
                   </label>
                 )}
               </div>
+
+              {/* ── Track as KPI ─────────────────────────────────────────── */}
+              {(() => {
+                const isMin = (cardDraft.target_type || 'min') === 'min';
+                const greenT = Number(cardDraft.green_threshold ?? (isMin ? 90 : 110));
+                const amberT = Number(cardDraft.amber_threshold ?? (isMin ? 75 : 125));
+                const targetVal = Number(cardDraft.target) || 0;
+                const unit = cardDraft.unit || 'currency';
+
+                // Validation
+                const thresholdError = isMin
+                  ? (amberT >= greenT ? 'At risk threshold must be lower than on-track threshold' : '')
+                  : (amberT <= greenT ? 'At risk threshold must be higher than on-track threshold' : '');
+
+                // Format a real value for zone labels
+                const fmtVal = (v: number) => {
+                  if (unit === 'currency') {
+                    if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+                    if (Math.abs(v) >= 1_000)     return `$${(v / 1_000).toFixed(1)}K`;
+                    return `$${v.toFixed(0)}`;
+                  }
+                  if (unit === 'percent') {
+                    return `${v.toFixed(1)}%`;
+                  }
+                  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+                  if (Math.abs(v) >= 1_000)     return `${(v / 1_000).toFixed(1)}K`;
+                  return v.toFixed(0);
+                };
+
+                // Band segments — bar always covers 0-100% for min, 0-maxBar for max
+                const maxBar = isMin ? 100 : Math.max(amberT + 10, 135);
+                const toBarPct = (t: number) => Math.min(100, t / maxBar * 100);
+
+                const segments = isMin
+                  ? [
+                      { color: '#ef4444', label: 'RED',   from: 0,       to: amberT,  w: toBarPct(amberT) },
+                      { color: '#f59e0b', label: 'AMBER', from: amberT,  to: greenT,  w: toBarPct(greenT) - toBarPct(amberT) },
+                      { color: '#22c55e', label: 'GREEN', from: greenT,  to: maxBar,  w: 100 - toBarPct(greenT) },
+                    ]
+                  : [
+                      { color: '#22c55e', label: 'GREEN', from: 0,       to: greenT,  w: toBarPct(greenT) },
+                      { color: '#f59e0b', label: 'AMBER', from: greenT,  to: amberT,  w: toBarPct(amberT) - toBarPct(greenT) },
+                      { color: '#ef4444', label: 'RED',   from: amberT,  to: maxBar,  w: 100 - toBarPct(amberT) },
+                    ];
+
+                const zoneLabels = isMin
+                  ? [
+                      { color: '#ef4444', pct: `0 – ${amberT}%`,    val: targetVal ? `< ${fmtVal(targetVal * amberT / 100)}` : '' },
+                      { color: '#f59e0b', pct: `${amberT} – ${greenT}%`, val: targetVal ? `${fmtVal(targetVal * amberT / 100)} – ${fmtVal(targetVal * greenT / 100)}` : '' },
+                      { color: '#22c55e', pct: `${greenT}%+`,        val: targetVal ? `≥ ${fmtVal(targetVal * greenT / 100)}` : '' },
+                    ]
+                  : [
+                      { color: '#22c55e', pct: `0 – ${greenT}%`,    val: targetVal ? `≤ ${fmtVal(targetVal * greenT / 100)}` : '' },
+                      { color: '#f59e0b', pct: `${greenT} – ${amberT}%`, val: targetVal ? `${fmtVal(targetVal * greenT / 100)} – ${fmtVal(targetVal * amberT / 100)}` : '' },
+                      { color: '#ef4444', pct: `${amberT}%+`,        val: targetVal ? `> ${fmtVal(targetVal * amberT / 100)}` : '' },
+                    ];
+
+                // Live dot from preview data
+                const liveMeasure = (cardDraft.measures || [])[0] || '';
+                const liveRaw = previewRows[0]?.[liveMeasure];
+                const liveVal = liveRaw !== undefined ? parseFloat(liveRaw) : null;
+                const livePct = (liveVal !== null && targetVal > 0)
+                  ? Math.min(100, Math.max(0, (liveVal / targetVal) * maxBar / maxBar * 100))
+                  : null;
+                const liveDotBarPct = (liveVal !== null && targetVal > 0)
+                  ? Math.min(100, (liveVal / targetVal * 100) / maxBar * 100)
+                  : null;
+
+                return (
+                  <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', userSelect: 'none' }}>
+                      <input
+                        type="checkbox"
+                        checked={!!cardDraft.track_as_kpi}
+                        onChange={e => setCardDraft((p: any) => ({ ...p, track_as_kpi: e.target.checked }))}
+                      />
+                      Track as KPI
+                      <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 400 }}>— configure target &amp; thresholds for the AI agent</span>
+                    </label>
+
+                    {!!cardDraft.track_as_kpi && (
+                      <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+
+                        {/* Owner + Unit */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>Owner</div>
+                            <select value={cardDraft.owner || 'marketing'} onChange={e => setCardDraft((p: any) => ({ ...p, owner: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12 }}>
+                              <option value="marketing">Marketing</option>
+                              <option value="sales">Sales</option>
+                              <option value="finance">Finance</option>
+                            </select>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>Unit</div>
+                            <select value={cardDraft.unit || 'currency'} onChange={e => setCardDraft((p: any) => ({ ...p, unit: e.target.value }))} style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12 }}>
+                              <option value="currency">Currency</option>
+                              <option value="percent">Percent</option>
+                              <option value="number">Number</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Target type */}
+                        <div>
+                          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>Target type</div>
+                          <select
+                            value={cardDraft.target_type || 'min'}
+                          onChange={e => {
+                            const tt = e.target.value;
+                            // min: green=90 (need ≥90% of target), amber=75 (amber below 75%)
+                            // max: green=100 (on/below target = good), amber=115 (15% over = red)
+                            setCardDraft((p: any) => ({ ...p, target_type: tt, green_threshold: tt === 'max' ? 100 : 90, amber_threshold: tt === 'max' ? 115 : 75 }));
+                          }}
+                          style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12 }}
+                        >
+                          <option value="min">Min — higher is better (revenue, leads, conversion rate)</option>
+                          <option value="max">Max — lower is better (CPL, CPA, churn, bounce rate)</option>
+                        </select>
+                        {!isMin && (
+                          <div style={{ marginTop: 5, fontSize: 11, color: C.textSecondary, background: C.blueLight, border: `1px solid ${C.blue}30`, borderRadius: 6, padding: '5px 8px', lineHeight: 1.5 }}>
+                            💡 Both thresholds are % of your target. <strong>100% = exactly on target.</strong> Set green at 100 (on/below target = good) and red at e.g. 115 (15% over target = bad).
+                          </div>
+                        )}
+                        </div>
+
+                        {/* Target value */}
+                        <div>
+                          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>Target value</div>
+                          <input
+                            type="number"
+                            value={cardDraft.target ?? ''}
+                            onChange={e => setCardDraft((p: any) => ({ ...p, target: e.target.value }))}
+                            style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12, boxSizing: 'border-box' }}
+                            placeholder="e.g. 1500000"
+                          />
+                        </div>
+
+                        {/* ── Performance zones ──────────────────────────────── */}
+                        <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 12px', background: C.surfaceAlt }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: C.textSecondary, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Performance zones</div>
+
+                          {/* Threshold inputs side by side */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                            <div>
+                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>
+                                {isMin
+                                  ? <>Green if value <strong>≥ <span style={{ color: '#22c55e' }}>{greenT}%</span></strong> of target</>
+                                  : <>Green if value <strong>≤ <span style={{ color: '#22c55e' }}>{greenT}%</span></strong> of target</>
+                                }
+                              </div>
+                              <input
+                                type="number"
+                                value={greenT}
+                                onChange={e => setCardDraft((p: any) => ({ ...p, green_threshold: Number(e.target.value) }))}
+                                placeholder={isMin ? 'e.g. 90' : 'e.g. 100'}
+                                style={{ width: '100%', border: `1px solid ${thresholdError ? '#ef4444' : C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12, boxSizing: 'border-box' }}
+                              />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>
+                                {isMin
+                                  ? <>Red if value <strong>{'< '}<span style={{ color: '#ef4444' }}>{amberT}%</span></strong> of target</>
+                                  : <>Red if value <strong>{'> '}<span style={{ color: '#ef4444' }}>{amberT}%</span></strong> of target</>
+                                }
+                              </div>
+                              <input
+                                type="number"
+                                value={amberT}
+                                onChange={e => setCardDraft((p: any) => ({ ...p, amber_threshold: Number(e.target.value) }))}
+                                placeholder={isMin ? 'e.g. 75' : 'e.g. 115'}
+                                style={{ width: '100%', border: `1px solid ${thresholdError ? '#ef4444' : C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12, boxSizing: 'border-box' }}
+                              />
+                            </div>
+                          </div>
+
+                          {thresholdError && (
+                            <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                              ⚠ {thresholdError}
+                              {/* Auto-fix button */}
+                              <button
+                                onClick={() => setCardDraft((p: any) => ({
+                                  ...p,
+                                  green_threshold: isMin ? Math.max(greenT, amberT) : Math.min(greenT, amberT),
+                                  amber_threshold: isMin ? Math.min(greenT, amberT) : Math.max(greenT, amberT),
+                                }))}
+                                style={{ fontSize: 11, border: `1px solid #ef4444`, background: '#fff', color: '#ef4444', borderRadius: 5, padding: '2px 7px', cursor: 'pointer' }}
+                              >
+                                Auto-fix
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Zone band — only render when thresholds are valid */}
+                          {thresholdError ? (
+                            <div style={{ fontSize: 11, color: C.textMuted, padding: '10px 0', textAlign: 'center' }}>
+                              Fix the thresholds above to see the zone preview.
+                            </div>
+                          ) : (() => {
+                            const alertT = Number(cardDraft.alert_threshold ?? 10);
+                            // For min (higher=better): agent fires only when value DROPS below target by alertT%
+                            // For max (lower=better): agent fires only when value RISES above target by alertT%
+                            const lowerAlertPct = 100 - alertT;   // relevant for min type
+                            const upperAlertPct = 100 + alertT;   // relevant for max type
+                            const lowerAlertBarPct = Math.max(0, Math.min(100, lowerAlertPct / maxBar * 100));
+                            const upperAlertBarPct = Math.min(100, upperAlertPct / maxBar * 100);
+                            const lowerAlertVal = targetVal > 0 ? targetVal * lowerAlertPct / 100 : null;
+                            const upperAlertVal = targetVal > 0 ? targetVal * upperAlertPct / 100 : null;
+
+                            // One-directional deviation check
+                            const deviationFires = (liveVal !== null && targetVal > 0) && (
+                              isMin
+                                ? liveVal < targetVal * lowerAlertPct / 100   // dropped below target by alertT%
+                                : liveVal > targetVal * upperAlertPct / 100   // rose above target by alertT%
+                            );
+                            const liveDeviationPct = (liveVal !== null && targetVal > 0)
+                              ? Math.abs((liveVal - targetVal) / targetVal * 100)
+                              : null;
+
+                            return (
+                              <>
+                                <div style={{ position: 'relative', marginBottom: 6, paddingBottom: 18 }}>
+                                  {/* Bar */}
+                                  <div style={{ display: 'flex', height: 20, borderRadius: 6, overflow: 'hidden', border: `1px solid ${C.border}` }}>
+                                    {segments.map((seg, i) => (
+                                      <div key={i} style={{ width: `${Math.max(seg.w, 0)}%`, background: seg.color, opacity: 0.85 }} />
+                                    ))}
+                                  </div>
+
+                                  {/* ⚡ AI tick — lower bound for min type only */}
+                                  {isMin && (
+                                    <div style={{ position: 'absolute', top: 0, left: `${lowerAlertBarPct}%`, transform: 'translateX(-50%)', pointerEvents: 'none', zIndex: 2 }}>
+                                      <div style={{ width: 2, height: 20, background: C.black, opacity: 0.7, borderLeft: '2px dashed rgba(0,0,0,0.6)' }} />
+                                      <div style={{ position: 'absolute', top: 22, left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                                        <span style={{ fontSize: 9, fontWeight: 700, color: C.black, background: '#fff8dc', border: '1px solid #d97706', borderRadius: 3, padding: '1px 3px', letterSpacing: '0.03em' }}>⚡ AI</span>
+                                        {lowerAlertVal !== null && <span style={{ fontSize: 9, color: C.textMuted }}>{fmtVal(lowerAlertVal)}</span>}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* ⚡ AI tick — upper bound for max type only */}
+                                  {!isMin && upperAlertBarPct < 99.5 && (
+                                    <div style={{ position: 'absolute', top: 0, left: `${upperAlertBarPct}%`, transform: 'translateX(-50%)', pointerEvents: 'none', zIndex: 2 }}>
+                                      <div style={{ width: 2, height: 20, background: C.black, opacity: 0.7, borderLeft: '2px dashed rgba(0,0,0,0.6)' }} />
+                                      <div style={{ position: 'absolute', top: 22, left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                                        <span style={{ fontSize: 9, fontWeight: 700, color: C.black, background: '#fff8dc', border: '1px solid #d97706', borderRadius: 3, padding: '1px 3px', letterSpacing: '0.03em' }}>⚡ AI</span>
+                                        {upperAlertVal !== null && <span style={{ fontSize: 9, color: C.textMuted }}>{fmtVal(upperAlertVal)}</span>}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Live dot */}
+                                  {liveDotBarPct !== null && (
+                                    <div style={{ position: 'absolute', top: -4, left: `calc(${liveDotBarPct}% - 1px)`, pointerEvents: 'none', zIndex: 3 }}>
+                                      <div style={{ width: 2, height: 28, background: deviationFires ? '#ef4444' : C.black, borderRadius: 2 }} />
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Live dot label */}
+                                {liveDotBarPct !== null && liveVal !== null && liveDeviationPct !== null && (
+                                  <div style={{ fontSize: 11, marginBottom: 8, textAlign: 'center', color: deviationFires ? '#ef4444' : C.textSecondary, fontWeight: deviationFires ? 600 : 400 }}>
+                                    {deviationFires ? '⚠ ' : '▲ '}
+                                    Today: <strong>{fmtVal(liveVal)}</strong> — {((liveVal / targetVal) * 100).toFixed(1)}% of target
+                                    {deviationFires ? ` · agent flags (${liveDeviationPct.toFixed(1)}% ${isMin ? 'below' : 'above'} target)` : ''}
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+
+                          {/* Zone labels — only when valid */}
+                          {!thresholdError && (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              {zoneLabels.map((z, i) => (
+                                <div key={i} style={{ flex: Math.max(segments[i].w, 2), minWidth: 0, background: z.color + '18', border: `1px solid ${z.color}40`, borderRadius: 6, padding: '5px 7px' }}>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: z.color, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{segments[i].label}</div>
+                                  <div style={{ fontSize: 10, color: C.textSecondary, marginTop: 1 }}>{z.pct}</div>
+                                  {z.val && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{z.val}</div>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ── AI agent ───────────────────────────────────────── */}
+                        <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 12px', background: C.surfaceAlt }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: C.textSecondary, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>AI agent</div>
+                          <div style={{ display: 'grid', gap: 8 }}>
+                            <div>
+                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>
+                                {isMin
+                                  ? <>Flag when value <strong>drops more than %</strong> below target</>
+                                  : <>Flag when value <strong>rises more than %</strong> above target</>
+                                }
+                                <span style={{ color: C.textMuted, fontWeight: 400 }}> — ⚡ marker on zone bar above</span>
+                              </div>
+                              <input
+                                type="number"
+                                value={cardDraft.alert_threshold ?? 10}
+                                onChange={e => setCardDraft((p: any) => ({ ...p, alert_threshold: Number(e.target.value) }))}
+                                style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12, boxSizing: 'border-box' }}
+                                placeholder="10"
+                              />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>Notes for AI</div>
+                              <textarea
+                                rows={3}
+                                value={cardDraft.calculation_notes || ''}
+                                onChange={e => setCardDraft((p: any) => ({ ...p, calculation_notes: e.target.value }))}
+                                style={{ width: '100%', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12, resize: 'vertical', fontFamily: "'Inter', sans-serif", boxSizing: 'border-box' }}
+                                placeholder="Plain English context, e.g. 'Total qualified leads generated this quarter, excluding duplicates.'"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'sticky', bottom: 0, background: C.surface, borderTop: `1px solid ${C.border}`, paddingTop: 10, paddingBottom: 2, zIndex: 2 }}>

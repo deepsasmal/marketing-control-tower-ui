@@ -74,6 +74,8 @@ export interface CardWithData {
   trend_pct: number | null;
   trend_direction: 'up' | 'down' | 'flat' | null;
   trend_label: string | null;
+  kpi_target_progress: number | null;
+  kpi_color_bucket: 'green' | 'amber' | 'red' | null;
   data: any[];
   row_count: number;
   error: string | null;
